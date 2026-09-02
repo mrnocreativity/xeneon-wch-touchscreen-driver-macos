@@ -1,13 +1,6 @@
 # Third-Party Research and Design References
 
-No third-party source code is vendored by this project, and none of the projects below is a runtime dependency. Their public work informed hardware validation and design decisions in the multi-display implementation.
-
-## Touch-Up
-
-- Repository: [shueber/Touch-Up](https://github.com/shueber/Touch-Up)
-- Author: Sebastian Hueber
-- License: [MIT](https://github.com/shueber/Touch-Up/blob/main/LICENSE)
-- Consulted for: associating a HID location identity with a stable CoreGraphics display UUID, and the direct-touch interaction model of tap, immediate scroll, and hold-to-drag.
+The public work below materially informed hardware validation and design decisions in the multi-display implementation. Each credit is scoped to the role that reference actually served.
 
 ## TouchscreenDriver
 
@@ -28,4 +21,4 @@ No third-party source code is vendored by this project, and none of the projects
 - Repository: [talesmousinho/m14t-touch-macos](https://github.com/talesmousinho/m14t-touch-macos)
 - Author: Tales Fonseca
 - License: [MIT](https://github.com/talesmousinho/m14t-touch-macos/blob/main/LICENSE)
-- Consulted for: separation of HID input, display resolution, coordinate mapping, and synthetic events in a dependency-free native Swift driver.
+- Consulted for: separation of HID input, display resolution, coordinate mapping, and synthetic events into small native Swift components.

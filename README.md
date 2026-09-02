@@ -2,9 +2,9 @@
 
 An independent open-source macOS user-space touch driver for the [CORSAIR XENEON EDGE](https://www.corsair.com/us/en/p/monitors/cc-9011306-ww/xeneon-edge-14-5-lcd-touchscreen-cc-9011306-ww) and compatible screens that expose the `wch.cn TouchScreen` controller as USB `27C0:0859`. It supports multiple identical touchscreens, safe per-controller display mapping, taps, direct pixel scrolling, hold-to-drag, double-clicking, focus restoration, hotplug recovery, and containment of incoherent controller report storms.
 
-It has no Touch Up dependency. Input capture, pairing UI, display resolution, event injection, and hotplug observation use documented macOS frameworks directly. It does not depend on private CoreDisplay symbols, unavailable display-service bridges, or I/O Registry topology guesses.
+Input capture, pairing UI, display resolution, event injection, accessibility-based focus restoration, and hotplug observation use documented macOS frameworks directly.
 
-The public project name mentions Xeneon because it is the best-known display using this controller, but the driver is not limited to Corsair-branded hardware. Retailers sell similarly constructed panels under several names. Compatibility comes from the controller protocol and configurable display matching, not from a Corsair software dependency.
+The public project name mentions Xeneon because it is the best-known display using this controller, but retailers sell similarly constructed panels under several names. Compatibility is determined by the controller protocol and configurable display matching.
 
 This project is not affiliated with or endorsed by Corsair, Prechen, or WCH. `OS X` appears in the repository description and topics as a common search term; the current Swift package requires macOS 13 or newer.
 
@@ -175,10 +175,7 @@ This implementation was informed by the public macOS touchscreen work and hardwa
 
 - [ymlaine/TouchscreenDriver](https://github.com/ymlaine/TouchscreenDriver) for its documentation of the Xeneon Edge controller, raw coordinate ranges, and exclusive user-space HID capture.
 - [Myseri/xeneon-edge-multitouch-macos](https://github.com/Myseri/xeneon-edge-multitouch-macos) for its hardware-verified USB/HID investigation and evidence explaining the controller's single-touch behavior on macOS.
-- [shueber/Touch-Up](https://github.com/shueber/Touch-Up) for the direct-touch interaction model of tap, immediate scroll, and hold-to-drag.
 - [talesmousinho/m14t-touch-macos](https://github.com/talesmousinho/m14t-touch-macos) as a reference for keeping HID input, display resolution, coordinate mapping, and synthetic events behind small native Swift boundaries.
-
-Those repositories identify their work as MIT-licensed. This project does not vendor their source or require any of them at runtime; the implementation in this repository uses native macOS frameworks behind its own existing abstractions.
 
 See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for authorship, license links, and the specific role of each reference.
 

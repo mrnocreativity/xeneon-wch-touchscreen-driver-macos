@@ -2,7 +2,7 @@
 
 ## Goal
 
-Turn the existing single-display WCH `27c0:0859` driver into a standalone macOS touch utility that supports multiple identical Prechen displays without Touch Up or another runtime dependency.
+Turn the existing single-display WCH `27c0:0859` driver into a standalone macOS touch utility that supports multiple identical Prechen displays.
 
 ## Product behavior
 
@@ -75,5 +75,4 @@ The cursor is borrowed only when required and restored after click or drag. Scro
 ## Constraints
 
 - The WCH firmware provides only one contact on macOS, so true multi-finger gestures are unavailable.
-- The solution uses native macOS frameworks only and has no Touch Up runtime dependency.
-- The current upstream checkout remains on `main`; changes are committed locally and are not pushed without explicit authorization.
+- The solution uses documented native macOS frameworks for HID input, display discovery, pairing UI, and event synthesis.

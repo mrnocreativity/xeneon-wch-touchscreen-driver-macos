@@ -10,7 +10,7 @@ public protocol PairingOverlayPresenting: AnyObject {
     func hide()
 }
 
-/// Native, dependency-free full-screen pairing overlay.
+/// Native full-screen pairing overlay.
 public final class PairingOverlayController: PairingOverlayPresenting {
     private var window: NSWindow?
 
