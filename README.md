@@ -1,8 +1,38 @@
-# Mac Xeneon Edge Touch Driver
+# Xeneon WCH Touchscreen Driver for macOS
 
-A native macOS user-space touch driver for the Corsair Xeneon Edge and compatible WCH `27C0:0859` panels. It supports multiple identical touchscreens, safe per-controller display mapping, taps, direct pixel scrolling, and deliberate hold-to-drag.
+An independent open-source macOS user-space touch driver for the [CORSAIR XENEON EDGE](https://www.corsair.com/us/en/p/monitors/cc-9011306-ww/xeneon-edge-14-5-lcd-touchscreen-cc-9011306-ww) and compatible screens that expose the `wch.cn TouchScreen` controller as USB `27C0:0859`. It supports multiple identical touchscreens, safe per-controller display mapping, taps, direct pixel scrolling, hold-to-drag, double-clicking, focus restoration, hotplug recovery, and containment of incoherent controller report storms.
 
 It has no Touch Up dependency. Input capture, pairing UI, display resolution, event injection, and hotplug observation use documented macOS frameworks directly. It does not depend on private CoreDisplay symbols, unavailable display-service bridges, or I/O Registry topology guesses.
+
+The public project name mentions Xeneon because it is the best-known display using this controller, but the driver is not limited to Corsair-branded hardware. Retailers sell similarly constructed panels under several names. Compatibility comes from the controller protocol and configurable display matching, not from a Corsair software dependency.
+
+This project is not affiliated with or endorsed by Corsair, Prechen, or WCH. `OS X` appears in the repository description and topics as a common search term; the current Swift package requires macOS 13 or newer.
+
+## Known Compatibility
+
+Last updated: **September 2, 2026**. This table distinguishes physically verified hardware from the original reference target and unverified controller matches.
+
+| Display or retail name | Known details | Compatibility evidence |
+| --- | --- | --- |
+| [Prechen HD-123 12.3-inch Portable Touch Screen Secondary Monitor](https://www.amazon.de/-/en/dp/B0CTMNPBX3), Amazon ASIN `B0CTMNPBX3` | 1920x720 IPS stretched-bar display sold for AIDA64 CPU/GPU/RAM monitoring; USB-C and HDMI; reports `wch.cn TouchScreen` USB `27C0:0859` | Physically verified on September 2, 2026 with two identical panels connected to one Mac. Pairing, tapping, scrolling, hold-drag, double-clicking, reconnect handling, and per-controller storm containment were exercised. |
+| [CORSAIR XENEON EDGE 14.5-inch LCD Touchscreen](https://www.corsair.com/us/en/p/monitors/cc-9011306-ww/xeneon-edge-14-5-lcd-touchscreen-cc-9011306-ww) | 2560x720 display; `wch.cn TouchScreen` USB `27C0:0859` | Original reference display and supported controller/display target inherited from the upstream project. This fork's expanded two-panel behavior was physically verified on the Prechen hardware above. |
+| Other displays reporting `wch.cn TouchScreen` USB `27C0:0859` | Often marketed as portable touchscreens, secondary monitors, stretched-bar displays, sensor panels, or AIDA64 monitors | Compatibility candidate. A matching controller ID is a strong signal, but display descriptors, report formats, and firmware can still differ. Please report successful or unsuccessful results. |
+
+## Report Another Compatible Display
+
+If your display uses this controller, [open a compatibility report](https://github.com/mrnocreativity/xeneon-wch-touchscreen-driver-macos/issues/new). Reports of both working and non-working models help define the real compatibility boundary. Exact brand names and retail listing titles also help other owners find this project when the same hardware is sold under another name.
+
+Please include:
+
+- brand and exact product or listing name;
+- model number, store link, and ASIN or equivalent store identifier;
+- USB manufacturer/product strings and VID:PID;
+- native display resolution;
+- Mac model and macOS version;
+- whether the display uses HDMI, direct USB-C, a hub, or a dock;
+- results for pairing, tapping, scrolling, hold-drag, and double-clicking.
+
+Do not post the controller's serial number or location ID. Once a report has enough evidence, its marketed product name and result can be added to the dated table so community-confirmed compatibility becomes easier to discover over time.
 
 ## How To Install
 
@@ -23,6 +53,8 @@ and installs the LaunchAgent at:
 ```text
 ~/Library/LaunchAgents/com.ajvwhite.MacXeneonEdgeTouchDriver.plist
 ```
+
+The installed executable, LaunchAgent label, configuration directory, and log paths retain the original `MacXeneonEdgeTouchDriver` identity so existing installations, privacy permissions, configuration, and saved pairings continue to work after the public repository rename.
 
 No script uses `sudo`. Driver logs are written to:
 

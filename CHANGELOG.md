@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Renames the public project to Xeneon WCH Touchscreen Driver for macOS while preserving the installed executable, LaunchAgent, configuration, logs, and pairing paths for upgrade compatibility.
+- Documents dated compatibility for the CORSAIR XENEON EDGE and the physically verified Prechen HD-123 / Amazon ASIN `B0CTMNPBX3`, and invites community reports for other `wch.cn TouchScreen` USB `27C0:0859` retail names.
 - Uses documented IOHID, CoreGraphics, AppKit, and Foundation APIs for dynamic multi-display pairing and display-change observation.
 - Reuses exact runtime assignments only within the current boot and restores across boots only when both public hardware identities are unique.
 - Requests calibration after reboot for identical panels with duplicate controller serials or zero display serials instead of guessing from display position.
