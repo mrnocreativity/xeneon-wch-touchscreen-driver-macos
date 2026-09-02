@@ -1,0 +1,265 @@
+# Xeneon WCH Touchscreen Driver for macOS: AI Installation Runbook
+
+Use this file when a user asks a local coding agent to install, verify,
+troubleshoot, or remove this repository's driver. The agent must have access to
+the checked-out repository and a terminal on the Mac that will use the
+touchscreen.
+
+## Intended result
+
+Install the current release build for the current macOS user, register its
+LaunchAgent, help the user complete macOS privacy approval and physical display
+pairing, and verify actual touchscreen behavior. A successful build alone is
+not a successful installation.
+
+The driver targets macOS 13 or newer and touch controllers reporting:
+
+- product name: `wch.cn TouchScreen`
+- USB VID:PID: `27C0:0859`
+
+Known displays and the limits of current compatibility evidence are documented
+in `README.md`.
+
+## Authority and safety boundaries
+
+When the user explicitly asks you to install this repository, you may run the
+read-only preflight checks below and `./Scripts/install.sh` without asking for
+another confirmation.
+
+- Do not use `sudo`; the installer is intentionally per-user.
+- Do not disable macOS security features or attempt to bypass privacy approval.
+- Do not delete or replace existing configuration or pairings during a routine
+  installation.
+- Do not print, paste, commit, or report hardware serial numbers, USB location
+  IDs, usernames, signing identities, or other machine-specific identifiers.
+- Do not change gesture or display configuration unless diagnosis proves it is
+  necessary and the user approves the specific change.
+- Do not commit, push, publish, open a pull request, or alter an existing pull
+  request unless the user separately requests it.
+- Do not uninstall or remove privacy entries unless the user explicitly asks.
+- Preserve unrelated worktree changes.
+
+Input Monitoring, Accessibility, and each **Touch this display** calibration
+touch require the user. Explain the exact step, wait for confirmation, and then
+continue. Never claim to have completed a physical or System Settings action
+that the user performed.
+
+## Stable internal installation identity
+
+Generated files intentionally use the original reverse-domain identifier
+`com.ajvwhite.MacXeneonEdgeTouchDriver`, even in the
+`mrnocreativity/xeneon-wch-touchscreen-driver-macos` fork. This is the stable
+internal identity inherited from the original project. It keeps upgrades on
+the same LaunchAgent, executable location, configuration, logs, saved pairings,
+and macOS privacy identity.
+
+The name does not represent a dependency, network service, extra application,
+or unexpected third-party installation. Replacing it with a fork-specific name
+such as `com.nocreativity` would create a second installation identity, could
+leave duplicate LaunchAgents, and could make macOS request privacy approval
+again.
+
+## 1. Read-only preflight
+
+Start in the repository root. Confirm the repository and tooling before making
+changes:
+
+```sh
+test -f Package.swift
+test -x Scripts/install.sh
+test "$(uname -s)" = "Darwin"
+sw_vers -productVersion
+command -v swift
+swift --version
+sh -n Scripts/install.sh Scripts/uninstall.sh Scripts/build-release.sh
+git status --short --branch
+```
+
+Stop with a clear explanation if this is not macOS 13 or newer, Swift is not
+available, or the installer is missing. Xcode or the Xcode Command Line Tools
+provide the Swift toolchain.
+
+Check whether the LaunchAgent is already registered. A nonzero result is normal
+before the first installation:
+
+```sh
+launchctl print "gui/$(id -u)/com.ajvwhite.MacXeneonEdgeTouchDriver" >/dev/null 2>&1 || true
+```
+
+Note whether these existing files are present, but do not remove or print their
+contents:
+
+```text
+~/Library/Application Support/MacXeneonEdgeTouchDriver/config.json
+~/Library/Application Support/MacXeneonEdgeTouchDriver/pairings.json
+~/Library/LaunchAgents/com.ajvwhite.MacXeneonEdgeTouchDriver.plist
+```
+
+The installer preserves an existing config. Existing pairings may remain valid
+when the attached devices expose sufficiently unique public identities; some
+identical panels intentionally require physical pairing again after reboot.
+
+## 2. Choose signing behavior
+
+If the user has already supplied a stable `CODESIGN_IDENTITY`, preserve and use
+it:
+
+```sh
+CODESIGN_IDENTITY="Developer ID Application: supplied identity" ./Scripts/install.sh
+```
+
+Do not invent an identity, reveal its value in your report, or ask the user to
+paste private signing material into chat. If no identity was supplied, use the
+normal installer command below. Its linker ad-hoc signature is supported, but
+macOS may request new privacy approval when a rebuilt executable changes.
+
+## 3. Install
+
+Run from the repository root:
+
+```sh
+./Scripts/install.sh
+```
+
+Do not prefix this command with `sudo`. The script builds the release binary,
+copies it to the current user's Application Support directory, creates the
+LaunchAgent, preserves an existing config, and bootstraps the agent.
+
+Expected installed locations:
+
+```text
+Binary:
+~/Library/Application Support/MacXeneonEdgeTouchDriver/bin/MacXeneonEdgeTouchDriver
+
+LaunchAgent:
+~/Library/LaunchAgents/com.ajvwhite.MacXeneonEdgeTouchDriver.plist
+
+Config:
+~/Library/Application Support/MacXeneonEdgeTouchDriver/config.json
+
+Logs:
+~/Library/Logs/MacXeneonEdgeTouchDriver/
+```
+
+## 4. Hand macOS privacy approval to the user
+
+Tell the user to open **System Settings > Privacy & Security** and grant:
+
+- **Input Monitoring**
+- **Accessibility**
+
+Approval should apply to the installed driver binary, or to the launching app
+if macOS attributes the request there. Use the exact installed binary path
+printed by the installer when identifying it. The agent cannot click, script,
+or bypass these approvals on the user's behalf.
+
+Wait until the user confirms both approvals. Then restart the registered agent
+so it receives the current permission state:
+
+```sh
+launchctl kickstart -k "gui/$(id -u)/com.ajvwhite.MacXeneonEdgeTouchDriver"
+```
+
+If macOS requires logout, login, or another manual confirmation, explain that
+truthfully and wait rather than repeatedly changing the installation.
+
+## 5. Hand physical pairing to the user
+
+When **Touch this display** appears, tell the user to touch that message on the
+physical touchscreen where it is displayed. Repeat once for every pairing
+overlay. Do not click an overlay with computer-use automation or guess display
+coordinates; the point of this step is to associate the USB controller that
+reported the physical touch with the display showing the overlay.
+
+Identical panels with duplicate or missing public serials may deliberately ask
+for pairing once after each Mac reboot. This is a safety behavior, not an
+installation failure.
+
+## 6. Verify the installed service
+
+Confirm that the registered LaunchAgent and installed binary are valid:
+
+```sh
+launchctl print "gui/$(id -u)/com.ajvwhite.MacXeneonEdgeTouchDriver"
+codesign --verify --strict --verbose=2 \
+  "$HOME/Library/Application Support/MacXeneonEdgeTouchDriver/bin/MacXeneonEdgeTouchDriver"
+```
+
+Inspect recent logs locally:
+
+```sh
+tail -n 100 "$HOME/Library/Logs/MacXeneonEdgeTouchDriver/driver.log"
+tail -n 100 "$HOME/Library/Logs/MacXeneonEdgeTouchDriver/stderr.log"
+```
+
+Summarize relevant health, permission, controller-discovery, display-matching,
+and pairing messages. Do not reproduce device fingerprints, serial numbers,
+location IDs, usernames, or unrelated log content in chat.
+
+If pairing was completed, confirm that `pairings.json` exists without printing
+it:
+
+```sh
+test -f "$HOME/Library/Application Support/MacXeneonEdgeTouchDriver/pairings.json"
+```
+
+## 7. Verify user-facing behavior
+
+Ask the user to test every connected touchscreen separately:
+
+1. Single-tap a harmless control on that display.
+2. Double-tap or double-click a harmless target.
+3. Drag immediately to scroll.
+4. Hold briefly, then move to drag a UI element.
+5. Confirm that touching one display does not activate another display.
+
+At least tapping and correct per-display targeting must be physically confirmed
+before reporting the driver as working. Record any gesture or display that was
+not tested as an explicit verification gap.
+
+## Focused troubleshooting
+
+- Driver exits immediately: inspect `driver.log` and verify Accessibility for
+  the exact installed binary or attributed launcher.
+- HID open failure: verify Input Monitoring and check whether another process
+  has seized the same controller.
+- Privacy approval disappears after rebuild: reinstall consistently with the
+  same stable `CODESIGN_IDENTITY`, if the user has one, and approve that signed
+  binary once.
+- No compatible display is detected: use `swift run DisplayInfo` for local
+  diagnosis, summarize only non-sensitive matching information, and do not
+  change config without approval.
+- Pairing overlay returns after reboot on identical displays: this is expected
+  when public controller or display identities are ambiguous.
+- Need deeper HID diagnosis: `swift run HIDDump` is non-seizing and separate
+  from the production daemon, but use it only when ordinary logs are
+  insufficient and avoid publishing raw identifiers.
+
+Do not delete `pairings.json` as a generic repair. Reset it only when the user
+specifically wants to discard display assignments and approves that action.
+
+## Uninstall only when explicitly requested
+
+```sh
+./Scripts/uninstall.sh
+```
+
+This removes the LaunchAgent and Application Support installation while
+keeping logs. macOS Privacy & Security entries must be removed manually if the
+user no longer wants them remembered.
+
+## Final report
+
+Report:
+
+- macOS and Swift prerequisites: passed or blocked;
+- build and per-user installation: passed or blocked;
+- LaunchAgent state and code-signature verification: passed or blocked;
+- Input Monitoring and Accessibility: user-confirmed or still required;
+- physical pairing for each display: user-confirmed or still required;
+- single-tap and correct per-display targeting: user-confirmed or unverified;
+- double-click, scrolling, and hold-drag: user-confirmed, failed, or unverified;
+- relevant log errors and the next focused action.
+
+Do not describe installation as complete while required privacy, pairing, or
+physical behavior checks remain unverified.

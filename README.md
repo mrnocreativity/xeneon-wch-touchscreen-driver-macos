@@ -34,7 +34,31 @@ Please include:
 
 Do not post the controller's serial number or location ID. Once a report has enough evidence, its marketed product name and result can be added to the dated table so community-confirmed compatibility becomes easier to discover over time.
 
-## How To Install
+## Install with an AI Coding Agent
+
+The easiest installation path is to give this repository to a local coding
+agent such as Codex, Claude Code, Cursor, or another AI tool with filesystem and
+terminal access. Ask it to follow the repository's [AI installation
+runbook](llm.txt). The runbook gives the agent the exact installation,
+permission, physical pairing, verification, troubleshooting, and uninstall
+contract.
+
+Copy and send this prompt to the agent:
+
+> Open this repository and follow `llm.txt` as the authoritative installation
+> runbook. Install and verify the driver on this Mac. Run the documented
+> read-only checks and installer, then explain and wait for any macOS privacy
+> approvals or physical **Touch this display** steps that I must perform. Do not
+> use sudo, discard existing configuration or pairings, expose hardware
+> identifiers, change unrelated files, commit, push, or alter a pull request.
+
+The AI agent cannot grant Input Monitoring or Accessibility permission and
+cannot perform the physical pairing touch for you. It should pause, tell you
+exactly what is needed, and continue verification after you confirm each step.
+A browser-only chatbot without access to this Mac can explain the process but
+cannot perform the installation.
+
+## Manual Installation
 
 To install for the current user, just run the following from the root of the checked out repository on the relevant mac:
 
@@ -54,7 +78,15 @@ and installs the LaunchAgent at:
 ~/Library/LaunchAgents/com.ajvwhite.MacXeneonEdgeTouchDriver.plist
 ```
 
-The installed executable, LaunchAgent label, configuration directory, and log paths retain the original `MacXeneonEdgeTouchDriver` identity so existing installations, privacy permissions, configuration, and saved pairings continue to work after the public repository rename.
+The generated filename and LaunchAgent label intentionally retain the original
+`com.ajvwhite.MacXeneonEdgeTouchDriver` installation identity. This is the
+stable internal identifier inherited from the original project—not an
+unexpected dependency, network service, or separate third-party application.
+Keeping it means existing installations, privacy permissions, configuration,
+logs, and saved pairings continue to work after the public repository rename.
+Changing it to a fork-specific identifier such as `com.nocreativity` would
+create a second installation identity, could leave duplicate LaunchAgents, and
+could make macOS request privacy approval again.
 
 No script uses `sudo`. Driver logs are written to:
 
