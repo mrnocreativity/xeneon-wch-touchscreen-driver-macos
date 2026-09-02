@@ -23,8 +23,11 @@ in `README.md`.
 ## Authority and safety boundaries
 
 When the user explicitly asks you to install this repository, you may run the
-read-only preflight checks below and `./Scripts/install.sh` without asking for
-another confirmation.
+read-only preflight checks below without asking for another confirmation. If
+the checks find no warning condition, you may then run `./Scripts/install.sh`.
+If a check proves that required software is unavailable, the code does not pass
+its local checks, or the required controller is not currently attached, inform
+the user and ask whether to continue before running the installer.
 
 - Do not use `sudo`; the installer is intentionally per-user.
 - Do not disable macOS security features or attempt to bypass privacy approval.
@@ -75,9 +78,47 @@ sh -n Scripts/install.sh Scripts/uninstall.sh Scripts/build-release.sh
 git status --short --branch
 ```
 
-Stop with a clear explanation if this is not macOS 13 or newer, Swift is not
-available, or the installer is missing. Xcode or the Xcode Command Line Tools
-provide the Swift toolchain.
+Confirm that the installed macOS major version satisfies the package's macOS 13
+minimum:
+
+```sh
+macos_version="$(sw_vers -productVersion)"
+macos_major="${macos_version%%.*}"
+test "$macos_major" -ge 13
+```
+
+Run the package's basic code checks before deciding that installation is likely
+to work on this Mac:
+
+```sh
+swift test -Xswiftc -warnings-as-errors
+swift build -c release -Xswiftc -warnings-as-errors
+```
+
+Check whether the exact USB controller matched by the production driver is
+currently attached. This command prints only the presence result, not device
+serial numbers or USB location IDs:
+
+```sh
+ioreg -p IOUSB -l -w0 -r -c IOUSBHostDevice | awk '
+  BEGIN { RS="" }
+  /"idVendor" = 10176/ && /"idProduct" = 2137/ { found=1 }
+  END {
+    if (found) {
+      print "Required USB controller 27C0:0859 detected"
+      exit 0
+    }
+    print "Required USB controller 27C0:0859 not detected"
+    exit 1
+  }
+'
+```
+
+The decimal values above are USB vendor `0x27C0` and product `0x0859`, the
+constants used by `XeneonEdgeDevice` and `HIDDeviceMonitor`. A successful check
+proves only that the required controller is present. It does not prove every
+gesture will work, and it does not identify compatibility from a retail brand
+or product name.
 
 Check whether the LaunchAgent is already registered. A nonzero result is normal
 before the first installation:
@@ -99,7 +140,47 @@ The installer preserves an existing config. Existing pairings may remain valid
 when the attached devices expose sufficiently unique public identities; some
 identical panels intentionally require physical pairing again after reboot.
 
-## 2. Choose signing behavior
+## 2. Decide whether installation is currently useful
+
+Base this decision only on the objective preflight results. Do not use the
+README compatibility table, retail display name, crowdsourced reports, visual
+similarity to a known display, or model intuition as a reason to warn or stop.
+
+Continue directly when all of these are true:
+
+- the host is macOS 13 or newer;
+- Swift and the repository scripts are available;
+- script syntax, tests, and the warning-clean release build pass;
+- USB controller `27C0:0859` is currently detected.
+
+Warn the user before installation when an objective check fails. The warning
+must state the failed check, the practical consequence, the recommended next
+action, and that the user may continue anyway.
+
+Use these distinctions:
+
+- **Required hardware not currently detected:** explain that the driver can be
+  installed, but touch cannot work or be physically verified until a
+  `27C0:0859` controller is connected. Do not call the display incompatible;
+  it may simply be disconnected or intended for later use.
+- **Software prerequisite unavailable:** identify the missing or unsupported
+  prerequisite, such as macOS below version 13 or no Swift toolchain. Explain
+  which installation or runtime step it prevents.
+- **Code check failed:** report whether script syntax, tests, or the release
+  build failed and summarize the relevant error without hiding it behind a
+  compatibility guess.
+
+Then ask whether the user wants to correct the issue first or continue anyway.
+Do not run `./Scripts/install.sh` until the user answers. If the user chooses to
+continue, proceed through every technically possible step and report expected
+failures or unverified behavior truthfully. A missing tool may make a requested
+command impossible; user permission to continue does not turn that failure into
+success.
+
+Unknown or unlisted hardware is not itself a warning condition. Only the exact
+local evidence above triggers this pause.
+
+## 3. Choose signing behavior
 
 If the user has already supplied a stable `CODESIGN_IDENTITY`, preserve and use
 it:
@@ -113,7 +194,7 @@ paste private signing material into chat. If no identity was supplied, use the
 normal installer command below. Its linker ad-hoc signature is supported, but
 macOS may request new privacy approval when a rebuilt executable changes.
 
-## 3. Install
+## 4. Install
 
 Run from the repository root:
 
@@ -141,7 +222,7 @@ Logs:
 ~/Library/Logs/MacXeneonEdgeTouchDriver/
 ```
 
-## 4. Hand macOS privacy approval to the user
+## 5. Hand macOS privacy approval to the user
 
 Tell the user to open **System Settings > Privacy & Security** and grant:
 
@@ -163,7 +244,7 @@ launchctl kickstart -k "gui/$(id -u)/com.ajvwhite.MacXeneonEdgeTouchDriver"
 If macOS requires logout, login, or another manual confirmation, explain that
 truthfully and wait rather than repeatedly changing the installation.
 
-## 5. Hand physical pairing to the user
+## 6. Hand physical pairing to the user
 
 When **Touch this display** appears, tell the user to touch that message on the
 physical touchscreen where it is displayed. Repeat once for every pairing
@@ -175,7 +256,7 @@ Identical panels with duplicate or missing public serials may deliberately ask
 for pairing once after each Mac reboot. This is a safety behavior, not an
 installation failure.
 
-## 6. Verify the installed service
+## 7. Verify the installed service
 
 Confirm that the registered LaunchAgent and installed binary are valid:
 
@@ -203,7 +284,7 @@ it:
 test -f "$HOME/Library/Application Support/MacXeneonEdgeTouchDriver/pairings.json"
 ```
 
-## 7. Verify user-facing behavior
+## 8. Verify user-facing behavior
 
 Ask the user to test every connected touchscreen separately:
 
@@ -252,6 +333,8 @@ user no longer wants them remembered.
 
 Report:
 
+- objective usefulness preflight: ready, warning accepted, or blocked, with the
+  exact failed check when applicable;
 - macOS and Swift prerequisites: passed or blocked;
 - build and per-user installation: passed or blocked;
 - LaunchAgent state and code-signature verification: passed or blocked;
