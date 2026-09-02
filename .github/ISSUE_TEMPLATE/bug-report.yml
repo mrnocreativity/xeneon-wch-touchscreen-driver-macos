@@ -1,0 +1,100 @@
+name: Installation, mapping, or gesture bug
+description: Report a reproducible driver problem on supported controller hardware.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please describe what happened on each physical display. Remove controller serial numbers, USB location IDs, usernames, and unrelated log content before submitting.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      multiple: true
+      options:
+        - Installation or LaunchAgent startup
+        - macOS privacy permissions
+        - Touch this display pairing
+        - Wrong display or coordinates
+        - Single tap
+        - Double-click
+        - Scrolling
+        - Hold-drag
+        - Focus restoration
+        - Sleep, reboot, reconnect, or rearrangement
+        - Controller storm handling
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: observed
+    attributes:
+      label: What happened?
+      description: Include which physical display was touched and which display or application reacted.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Start with...
+        2. Touch...
+        3. Observe...
+    validations:
+      required: true
+
+  - type: input
+    id: hardware
+    attributes:
+      label: Display model and public USB VID:PID
+      placeholder: Prechen HD-123 — 27C0:0859
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Mac model, macOS version, and connection path
+      placeholder: Mac mini, macOS 15.x, touch through Thunderbolt hub and video through HDMI
+    validations:
+      required: true
+
+  - type: input
+    id: panels
+    attributes:
+      label: Number of connected touch panels
+      placeholder: "2"
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant sanitized log lines
+      description: Include only the short section surrounding the failure. Remove controller fingerprints, serial numbers, location IDs, usernames, and unrelated activity.
+      render: text
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Required checks
+      options:
+        - label: I tested the latest release or current main branch.
+          required: true
+        - label: I removed controller serial numbers, USB location IDs, usernames, and other private machine identifiers.
+          required: true

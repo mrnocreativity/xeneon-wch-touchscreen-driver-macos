@@ -2,11 +2,23 @@
 
 An independent open-source macOS user-space touch driver for the [CORSAIR XENEON EDGE](https://www.corsair.com/us/en/p/monitors/cc-9011306-ww/xeneon-edge-14-5-lcd-touchscreen-cc-9011306-ww) and compatible screens that expose the `wch.cn TouchScreen` controller as USB `27C0:0859`. It supports multiple identical touchscreens, safe per-controller display mapping, taps, direct pixel scrolling, hold-to-drag, double-clicking, focus restoration, hotplug recovery, and containment of incoherent controller report storms.
 
+[![A real Mac desk setup with two WCH touchscreen displays below an ultrawide monitor](Assets/xeneon-wch-touchscreen-desk-setup.jpg)](https://nocreativity.com/blog/how-openai-codex-turned-a-hardware-problem-into-a-pr)
+
 Input capture, pairing UI, display resolution, event injection, accessibility-based focus restoration, and hotplug observation use documented macOS frameworks directly.
 
 The public project name mentions Xeneon because it is the best-known display using this controller, but retailers sell similarly constructed panels under several names. Compatibility is determined by the controller protocol and configurable display matching.
 
 This project is not affiliated with or endorsed by Corsair, Prechen, or WCH. `OS X` appears in the repository description and topics as a common search term; the current Swift package requires macOS 13 or newer.
+
+## Problems This Fixes
+
+- Touching a secondary display activates the current mouse position or the wrong Mac display.
+- Two identical USB touch controllers cannot be safely matched to their physical screens.
+- A panel behaves like an indirect trackpad instead of providing taps, direct scrolling, hold-drag, and double-click.
+- Display rearrangement, reconnects, sleep, or login leave touch mapped to stale screen coordinates.
+- A faulty controller report storm causes rapid unintended cursor movement or clicks.
+
+The driver pairs each physical controller with the display the user actually touches, follows live display geometry, restores the previously focused Mac window without another synthetic click, and isolates malformed input per controller.
 
 ## Known Compatibility
 
@@ -20,7 +32,7 @@ Last updated: **September 2, 2026**. This table distinguishes physically verifie
 
 ## Report Another Compatible Display
 
-If your display uses this controller, [open a compatibility report](https://github.com/mrnocreativity/xeneon-wch-touchscreen-driver-macos/issues/new). Reports of both working and non-working models help define the real compatibility boundary. Exact brand names and retail listing titles also help other owners find this project when the same hardware is sold under another name.
+If your display uses this controller, [open a compatibility report](https://github.com/mrnocreativity/xeneon-wch-touchscreen-driver-macos/issues/new?template=compatibility-report.yml). Reports of both working and non-working models help define the real compatibility boundary. Exact brand names and retail listing titles also help other owners find this project when the same hardware is sold under another name.
 
 Please include:
 
@@ -33,6 +45,8 @@ Please include:
 - results for pairing, tapping, scrolling, hold-drag, and double-clicking.
 
 Do not post the controller's serial number or location ID. Once a report has enough evidence, its marketed product name and result can be added to the dated table so community-confirmed compatibility becomes easier to discover over time.
+
+If the driver works for your setup, please star the repository and submit a compatibility report. Both signals help owners of the same rebranded hardware find a tested result instead of starting the investigation again.
 
 ## Install with an AI Coding Agent
 

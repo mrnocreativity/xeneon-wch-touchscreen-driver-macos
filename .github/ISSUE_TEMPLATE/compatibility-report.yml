@@ -1,0 +1,106 @@
+name: Hardware compatibility report
+description: Report a working or non-working display that exposes the WCH touch controller.
+title: "[Compatibility]: "
+labels:
+  - compatibility
+  - hardware
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping identify the retail names that use this controller. Reports of both working and non-working hardware are useful. Do not include controller serial numbers or USB location IDs.
+
+  - type: input
+    id: product-name
+    attributes:
+      label: Brand and exact retail product name
+      placeholder: Prechen HD-123 12.3-inch Portable Touch Screen Secondary Monitor
+    validations:
+      required: true
+
+  - type: input
+    id: model
+    attributes:
+      label: Model number
+      placeholder: HD-123
+    validations:
+      required: true
+
+  - type: input
+    id: listing
+    attributes:
+      label: Store link and ASIN or equivalent identifier
+      placeholder: https://www.amazon.example/... — ASIN B0...
+    validations:
+      required: false
+
+  - type: input
+    id: usb-controller
+    attributes:
+      label: USB manufacturer, product name, and VID:PID
+      description: Include public product information only. Do not include a serial number or location ID.
+      placeholder: wch.cn TouchScreen — 27C0:0859
+    validations:
+      required: true
+
+  - type: input
+    id: resolution
+    attributes:
+      label: Native display resolution
+      placeholder: 1920x720
+    validations:
+      required: true
+
+  - type: input
+    id: mac
+    attributes:
+      label: Mac model and macOS version
+      placeholder: Mac mini, macOS 15.x
+    validations:
+      required: true
+
+  - type: dropdown
+    id: connection
+    attributes:
+      label: Connection path
+      multiple: true
+      options:
+        - Direct USB-C
+        - USB-C or Thunderbolt hub/dock
+        - USB-A for touch plus HDMI for video
+        - USB-C for touch plus HDMI for video
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: results
+    attributes:
+      label: Results
+      description: Describe pairing, tapping, scrolling, hold-drag, double-click, reconnect, and reboot behavior for every connected panel.
+      placeholder: |
+        Panels tested:
+        Pairing:
+        Single tap:
+        Scrolling:
+        Hold-drag:
+        Double-click:
+        Reconnect/reboot:
+    validations:
+      required: true
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional hardware or firmware notes
+      description: Mention differences between multiple panels, firmware labels, or retail variants without exposing unique device identifiers.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy check
+      options:
+        - label: I removed controller serial numbers, USB location IDs, usernames, and other private machine identifiers.
+          required: true

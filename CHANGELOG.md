@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.1.0 - 2026-09-02
+
 - Renames the public project to Xeneon WCH Touchscreen Driver for macOS while preserving the installed executable, LaunchAgent, configuration, logs, and pairing paths for upgrade compatibility.
 - Documents dated compatibility for the CORSAIR XENEON EDGE and the physically verified Prechen HD-123 / Amazon ASIN `B0CTMNPBX3`, and invites community reports for other `wch.cn TouchScreen` USB `27C0:0859` retail names.
 - Uses documented IOHID, CoreGraphics, AppKit, and Foundation APIs for dynamic multi-display pairing and display-change observation.
@@ -21,6 +23,9 @@
 - Logs storm entry, periodic aggregate activity, and automatic recovery after one second of raw-report silence using a storm-only one-second GCD interval.
 - Holds unconfirmed normal contacts outside gesture synthesis, preventing the hold-to-drag timer from turning an initial storm report into a click.
 - Extends `HIDDump` with wall-clock timestamps and dynamic controller location IDs for evidence-based multi-controller diagnostics.
+- Adds an AI installation runbook for Codex, Claude Code, Cursor, and other local coding agents, including privacy, pairing, verification, troubleshooting, and uninstall handoffs.
+- Adds an objective pre-install usefulness check based only on macOS, Swift, code verification, and live `27C0:0859` controller presence—not crowdsourced compatibility guesses.
+- Adds a real two-touchscreen desk image, problem-oriented README summary, structured compatibility and bug reports, and GitHub metadata for easier discovery.
 
 ## 1.0.0 - 2026-05-03
 
