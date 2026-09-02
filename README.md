@@ -10,13 +10,13 @@ The public project name mentions Xeneon because it is the best-known display usi
 
 This project is not affiliated with or endorsed by Corsair, Prechen, or WCH. `OS X` appears in the repository description and topics as a common search term; the current Swift package requires macOS 13 or newer.
 
-## Problems This Fixes
+## What This Driver Does for You
 
-- Touching a secondary display activates the current mouse position or the wrong Mac display.
-- Two identical USB touch controllers cannot be safely matched to their physical screens.
-- A panel behaves like an indirect trackpad instead of providing taps, direct scrolling, hold-drag, and double-click.
-- Display rearrangement, reconnects, sleep, or login leave touch mapped to stale screen coordinates.
-- A faulty controller report storm causes rapid unintended cursor movement or clicks.
+- Touch the display you intend: taps land at the touched position on that screen, not at the current mouse position or on another display.
+- Use multiple identical WCH touchscreens, with each controller paired safely to its physical display.
+- Interact naturally with taps, direct scrolling, hold-to-drag, and double-clicking instead of indirect trackpad behavior.
+- Keep touch aligned after display rearrangement, reconnects, sleep, and login.
+- Stay in control if a faulty controller produces a report storm: malformed input is contained to that controller instead of causing unintended cursor movement or clicks.
 
 The driver pairs each physical controller with the display the user actually touches, follows live display geometry, restores the previously focused Mac window without another synthetic click, and isolates malformed input per controller.
 
