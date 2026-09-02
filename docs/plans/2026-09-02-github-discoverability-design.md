@@ -27,13 +27,16 @@ surface now and deliberately defers leaving the fork network.
 
 ### Topics and profile
 
-Keep all existing topics and use the remaining five topic slots for:
+Keep all existing topics and use the remaining four topic slots for:
 
 - `macos-driver`
-- `swift`
 - `corsair-xeneon-edge`
 - `prechen-hd-123`
 - `stretched-bar-display`
+
+GitHub already identifies Swift as the repository's primary language, so the
+limited topic slots are more useful for device names and problem-oriented
+search terms.
 
 Pin the repository to the owner's GitHub profile so profile visitors can find
 it directly.
