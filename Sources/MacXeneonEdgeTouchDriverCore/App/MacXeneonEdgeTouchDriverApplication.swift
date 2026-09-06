@@ -14,6 +14,8 @@ public final class MacXeneonEdgeTouchDriverApplication {
     private let inputSink: SyntheticInputSink
     private let cursorController: CursorController
     private let focusRestorerProvider: () -> FocusRestorer
+    private let requiredStablePairingTopologyObservations: Int
+    private let pairingTopologyRetryDelay: DispatchTimeInterval
 
     private lazy var hidMonitor = HIDDeviceMonitor(
         eventQueue: gestureQueue,
@@ -34,6 +36,9 @@ public final class MacXeneonEdgeTouchDriverApplication {
     private var reconciliationWork: DispatchWorkItem?
     private var screenParametersObserver: NSObjectProtocol?
     private var overlayPresentationAttempt = 0
+    private var pairingTopologySignature: PairingTopologySignature?
+    private var stablePairingTopologyObservationCount = 0
+    private var pairingTopologyWaitDescription: String?
     private var activeGestureDevice: TouchDeviceIdentity?
     private var stuckGestureTimer: DispatchSourceTimer?
     private var signalSources: [DispatchSourceSignal] = []
@@ -48,7 +53,9 @@ public final class MacXeneonEdgeTouchDriverApplication {
             cursorController: CGCursorController(),
             focusRestorerProvider: { AXFocusRestorer() },
             pairingStore: PairingStore(),
-            pairingOverlay: PairingOverlayController()
+            pairingOverlay: PairingOverlayController(),
+            requiredStablePairingTopologyObservations: 2,
+            pairingTopologyRetryDelay: .milliseconds(750)
         )
     }
 
@@ -59,7 +66,9 @@ public final class MacXeneonEdgeTouchDriverApplication {
         cursorController: CursorController,
         focusRestorerProvider: @escaping () -> FocusRestorer = { NoOpFocusRestorer() },
         pairingStore: PairingStore = PairingStore(),
-        pairingOverlay: PairingOverlayPresenting = PairingOverlayController()
+        pairingOverlay: PairingOverlayPresenting = PairingOverlayController(),
+        requiredStablePairingTopologyObservations: Int = 1,
+        pairingTopologyRetryDelay: DispatchTimeInterval = .milliseconds(750)
     ) {
         self.configuration = configuration
         self.displayResolver = displayResolver
@@ -68,6 +77,11 @@ public final class MacXeneonEdgeTouchDriverApplication {
         self.focusRestorerProvider = focusRestorerProvider
         self.pairingStore = pairingStore
         self.pairingOverlay = pairingOverlay
+        self.requiredStablePairingTopologyObservations = max(
+            requiredStablePairingTopologyObservations,
+            1
+        )
+        self.pairingTopologyRetryDelay = pairingTopologyRetryDelay
     }
 
     deinit { stop() }
@@ -364,12 +378,45 @@ public final class MacXeneonEdgeTouchDriverApplication {
         let usedDisplayIDs = Set(resolved.values.map(\.displayID))
         let candidates = compatibleDisplays.filter { !usedDisplayIDs.contains($0.displayID) }
 
-        guard !unresolved.isEmpty, let target = candidates.first else {
+        guard !unresolved.isEmpty else {
             pairingTarget = nil
             overlayPresentationAttempt = 0
+            resetPairingTopologyStability()
+            pairingTopologyWaitDescription = nil
             pairingOverlay.hide()
             return
         }
+
+        guard unresolved.count == candidates.count, let target = candidates.first else {
+            pairingTarget = nil
+            overlayPresentationAttempt = 0
+            resetPairingTopologyStability()
+            pairingOverlay.hide()
+            waitForPairingTopology(
+                "Waiting for complete pairing topology: \(unresolved.count) unresolved controller(s), \(candidates.count) unused compatible display(s)."
+            )
+            return
+        }
+
+        let topologySignature = PairingTopologySignature(
+            devices: connectedDevices,
+            displays: compatibleDisplays
+        )
+        if pairingTopologySignature == topologySignature {
+            stablePairingTopologyObservationCount += 1
+        } else {
+            pairingTopologySignature = topologySignature
+            stablePairingTopologyObservationCount = 1
+        }
+
+        guard stablePairingTopologyObservationCount >= requiredStablePairingTopologyObservations else {
+            pairingTarget = nil
+            overlayPresentationAttempt = 0
+            pairingOverlay.hide()
+            waitForPairingTopology("Waiting for reconnect topology to remain stable before calibration.")
+            return
+        }
+        pairingTopologyWaitDescription = nil
 
         let total = min(connectedDevices.count, compatibleDisplays.count)
         let step = min(resolved.count + 1, total)
@@ -585,8 +632,28 @@ public final class MacXeneonEdgeTouchDriverApplication {
         gestureQueue.asyncAfter(deadline: .now() + .milliseconds(500), execute: work)
     }
 
+    private func waitForPairingTopology(_ description: String) {
+        if pairingTopologyWaitDescription != description {
+            DriverLoggers.log(.notice, category: .display, description)
+            pairingTopologyWaitDescription = description
+        }
+        reconciliationWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.refreshDisplayMappings(reason: "pairing topology readiness retry")
+        }
+        reconciliationWork = work
+        gestureQueue.asyncAfter(deadline: .now() + pairingTopologyRetryDelay, execute: work)
+    }
+
+    private func resetPairingTopologyStability() {
+        pairingTopologySignature = nil
+        stablePairingTopologyObservationCount = 0
+    }
+
     private func cancelPairingPresentation() {
         pairingTarget = nil
+        resetPairingTopologyStability()
+        pairingTopologyWaitDescription = nil
         pairingAdvanceWork?.cancel()
         pairingAdvanceWork = nil
         pairingOverlay.hide()
@@ -650,6 +717,37 @@ private final class DeviceTouchSession {
         stormRecoveryTimer?.cancel()
         stormRecoveryTimer = nil
         stormSummaryTickCount = 0
+    }
+}
+
+private struct PairingTopologySignature: Equatable {
+    let devices: [TouchDeviceIdentity]
+    let displays: [PairingDisplaySignature]
+
+    init(devices: Set<TouchDeviceIdentity>, displays: [DisplaySnapshot]) {
+        self.devices = devices.sorted { lhs, rhs in
+            if lhs.locationID != rhs.locationID { return lhs.locationID < rhs.locationID }
+            return (lhs.serialNumber ?? "") < (rhs.serialNumber ?? "")
+        }
+        self.displays = displays.map(PairingDisplaySignature.init).sorted { lhs, rhs in
+            lhs.displayID < rhs.displayID
+        }
+    }
+}
+
+private struct PairingDisplaySignature: Equatable {
+    let displayID: CGDirectDisplayID
+    let vendorNumber: UInt32
+    let modelNumber: UInt32
+    let serialNumber: UInt32
+    let bounds: CGRect
+
+    init(_ display: DisplaySnapshot) {
+        displayID = display.displayID
+        vendorNumber = display.vendorNumber
+        modelNumber = display.modelNumber
+        serialNumber = display.serialNumber
+        bounds = display.bounds
     }
 }
 

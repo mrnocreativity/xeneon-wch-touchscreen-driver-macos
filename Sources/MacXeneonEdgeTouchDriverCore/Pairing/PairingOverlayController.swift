@@ -39,16 +39,36 @@ public final class PairingOverlayController: PairingOverlayPresenting {
     private func present(on display: DisplaySnapshot, title: String, detail: String) -> Bool {
         runOnMainReturning { [weak self] in
             let screens = NSScreen.screens
+            let mainDisplayID = CGMainDisplayID()
             guard let self,
-                  let primaryScreen = screens.first,
+                  let primaryScreen = Self.screen(for: mainDisplayID, in: screens),
                   let screen = Self.screen(for: display.displayID, in: screens) else {
                 DriverLoggers.log(.error, category: .display, "Could not present pairing overlay for display \(display.displayID).")
                 return false
             }
 
+            guard CGDisplayIsActive(display.displayID) != 0 else {
+                DriverLoggers.log(
+                    .warning,
+                    category: .display,
+                    "Target display \(display.displayID) is no longer active; presentation will retry."
+                )
+                return false
+            }
+
+            let currentDisplay = Self.snapshot(for: display.displayID)
+            guard PairingOverlayGeometry.snapshotsMatch(display, currentDisplay) else {
+                DriverLoggers.log(
+                    .warning,
+                    category: .display,
+                    "CoreGraphics state changed before presenting on display \(display.displayID); presentation will retry."
+                )
+                return false
+            }
+
             let expectedFrame = PairingOverlayGeometry.appKitFrame(
-                for: display.bounds,
-                primaryCoreGraphicsFrame: CGDisplayBounds(CGMainDisplayID()),
+                for: currentDisplay.bounds,
+                primaryCoreGraphicsFrame: CGDisplayBounds(mainDisplayID),
                 primaryAppKitFrame: primaryScreen.frame
             )
             guard PairingOverlayGeometry.framesMatch(screen.frame, expectedFrame) else {
@@ -77,7 +97,6 @@ public final class PairingOverlayController: PairingOverlayPresenting {
             window.collectionBehavior = [.fullScreenAuxiliary, .stationary]
             window.contentView = PairingOverlayView(title: title, detail: detail)
             window.setFrame(expectedFrame, display: true)
-            window.orderFrontRegardless()
 
             guard Self.displayID(for: window.screen) == display.displayID,
                   PairingOverlayGeometry.framesMatch(window.frame, expectedFrame) else {
@@ -91,6 +110,7 @@ public final class PairingOverlayController: PairingOverlayPresenting {
             }
 
             self.window = window
+            window.orderFrontRegardless()
             return true
         }
     }
@@ -106,6 +126,18 @@ public final class PairingOverlayController: PairingOverlayPresenting {
         guard let screen else { return nil }
         let key = NSDeviceDescriptionKey("NSScreenNumber")
         return (screen.deviceDescription[key] as? NSNumber)?.uint32Value
+    }
+
+    private static func snapshot(for displayID: CGDirectDisplayID) -> DisplaySnapshot {
+        DisplaySnapshot(
+            displayID: displayID,
+            vendorNumber: CGDisplayVendorNumber(displayID),
+            modelNumber: CGDisplayModelNumber(displayID),
+            serialNumber: CGDisplaySerialNumber(displayID),
+            bounds: CGDisplayBounds(displayID),
+            pixelsWide: CGDisplayPixelsWide(displayID),
+            pixelsHigh: CGDisplayPixelsHigh(displayID)
+        )
     }
 
     private func runOnMain(_ operation: @escaping () -> Void) {
@@ -126,6 +158,19 @@ public final class PairingOverlayController: PairingOverlayPresenting {
 
 /// Pure coordinate conversion and comparison used to validate AppKit readiness.
 enum PairingOverlayGeometry {
+    static func snapshotsMatch(
+        _ expected: DisplaySnapshot,
+        _ current: DisplaySnapshot
+    ) -> Bool {
+        expected.displayID == current.displayID &&
+            expected.vendorNumber == current.vendorNumber &&
+            expected.modelNumber == current.modelNumber &&
+            expected.serialNumber == current.serialNumber &&
+            expected.pixelsWide == current.pixelsWide &&
+            expected.pixelsHigh == current.pixelsHigh &&
+            framesMatch(expected.bounds, current.bounds)
+    }
+
     static func appKitFrame(
         for coreGraphicsFrame: CGRect,
         primaryCoreGraphicsFrame: CGRect,

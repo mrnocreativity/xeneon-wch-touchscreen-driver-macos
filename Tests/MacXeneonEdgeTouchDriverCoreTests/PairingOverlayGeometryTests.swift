@@ -35,4 +35,42 @@ final class PairingOverlayGeometryTests: XCTestCase {
             expected
         ))
     }
+
+    func testSnapshotComparisonRejectsChangedBoundsAndDescriptors() {
+        let expected = snapshot(
+            id: 3,
+            vendor: 7_745,
+            bounds: CGRect(x: 3_840, y: 1_440, width: 1_280, height: 480)
+        )
+
+        XCTAssertTrue(PairingOverlayGeometry.snapshotsMatch(expected, expected))
+        XCTAssertFalse(PairingOverlayGeometry.snapshotsMatch(
+            expected,
+            snapshot(
+                id: 3,
+                vendor: 7_745,
+                bounds: CGRect(x: 0, y: 0, width: 1_280, height: 480)
+            )
+        ))
+        XCTAssertFalse(PairingOverlayGeometry.snapshotsMatch(
+            expected,
+            snapshot(id: 3, vendor: 9_999, bounds: expected.bounds)
+        ))
+    }
+
+    private func snapshot(
+        id: CGDirectDisplayID,
+        vendor: UInt32,
+        bounds: CGRect
+    ) -> DisplaySnapshot {
+        DisplaySnapshot(
+            displayID: id,
+            vendorNumber: vendor,
+            modelNumber: 21_579,
+            serialNumber: 0,
+            bounds: bounds,
+            pixelsWide: 1_280,
+            pixelsHigh: 480
+        )
+    }
 }

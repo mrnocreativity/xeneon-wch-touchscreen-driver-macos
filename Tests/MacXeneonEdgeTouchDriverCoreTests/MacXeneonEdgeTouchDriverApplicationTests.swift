@@ -396,6 +396,107 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
         }, [.show("LEFT", 1, 2)])
     }
 
+    func testIncompleteReconnectTopologyDoesNotPresentPairingOverlay() {
+        let left = display(id: 41, runtimeIdentifier: "LEFT", x: 0)
+        let resolver = DisplayResolver(activeDisplayProvider: { [left] })
+        let overlay = ApplicationRecordingPairingOverlay()
+        let application = MacXeneonEdgeTouchDriverApplication(
+            configuration: immediateConfiguration(),
+            displayResolver: resolver,
+            inputSink: ApplicationRecordingInputSink(),
+            cursorController: ApplicationRecordingCursorController(),
+            pairingStore: pairingStore(),
+            pairingOverlay: overlay,
+            pairingTopologyRetryDelay: .seconds(60)
+        )
+
+        application.handleDeviceMatched(TouchDeviceIdentity(locationID: 1))
+        application.handleDeviceMatched(TouchDeviceIdentity(locationID: 2))
+        application.refreshDisplayMappings(reason: "test incomplete reconnect")
+
+        XCTAssertFalse(overlay.calls.contains { call in
+            if case .show = call { return true }
+            return false
+        })
+    }
+
+    func testIncompleteReconnectTopologyRetriesWhenMissingDisplayAppears() {
+        let left = display(id: 41, runtimeIdentifier: "LEFT", x: 0)
+        let right = display(id: 42, runtimeIdentifier: "RIGHT", x: 2_000)
+        var displays = [left]
+        let resolver = DisplayResolver(activeDisplayProvider: { displays })
+        let overlay = ApplicationRecordingPairingOverlay()
+        let application = MacXeneonEdgeTouchDriverApplication(
+            configuration: immediateConfiguration(),
+            displayResolver: resolver,
+            inputSink: ApplicationRecordingInputSink(),
+            cursorController: ApplicationRecordingCursorController(),
+            pairingStore: pairingStore(),
+            pairingOverlay: overlay,
+            pairingTopologyRetryDelay: .milliseconds(50)
+        )
+
+        application.handleDeviceMatched(TouchDeviceIdentity(locationID: 1))
+        application.handleDeviceMatched(TouchDeviceIdentity(locationID: 2))
+        application.refreshDisplayMappings(reason: "test incomplete reconnect")
+        displays = [left, right]
+        waitForAsyncWork(milliseconds: 150)
+
+        XCTAssertTrue(overlay.calls.contains(.show("LEFT", 1, 2)))
+    }
+
+    func testProductionTopologyGateRequiresTwoIdenticalObservations() {
+        let left = display(id: 41, runtimeIdentifier: "LEFT", x: 0)
+        let right = display(id: 42, runtimeIdentifier: "RIGHT", x: 2_000)
+        let resolver = DisplayResolver(activeDisplayProvider: { [left, right] })
+        let overlay = ApplicationRecordingPairingOverlay()
+        let application = MacXeneonEdgeTouchDriverApplication(
+            configuration: immediateConfiguration(),
+            displayResolver: resolver,
+            inputSink: ApplicationRecordingInputSink(),
+            cursorController: ApplicationRecordingCursorController(),
+            pairingStore: pairingStore(),
+            pairingOverlay: overlay,
+            requiredStablePairingTopologyObservations: 2,
+            pairingTopologyRetryDelay: .seconds(60)
+        )
+
+        application.handleDeviceMatched(TouchDeviceIdentity(locationID: 1))
+        application.handleDeviceMatched(TouchDeviceIdentity(locationID: 2))
+        application.refreshDisplayMappings(reason: "test first stable observation")
+        XCTAssertFalse(overlay.calls.contains(.show("LEFT", 1, 2)))
+
+        application.refreshDisplayMappings(reason: "test second stable observation")
+        XCTAssertTrue(overlay.calls.contains(.show("LEFT", 1, 2)))
+    }
+
+    func testChangedBoundsResetPairingTopologyStability() {
+        let left = display(id: 41, runtimeIdentifier: "LEFT", x: 0)
+        var right = display(id: 42, runtimeIdentifier: "RIGHT", x: 2_000)
+        let resolver = DisplayResolver(activeDisplayProvider: { [left, right] })
+        let overlay = ApplicationRecordingPairingOverlay()
+        let application = MacXeneonEdgeTouchDriverApplication(
+            configuration: immediateConfiguration(),
+            displayResolver: resolver,
+            inputSink: ApplicationRecordingInputSink(),
+            cursorController: ApplicationRecordingCursorController(),
+            pairingStore: pairingStore(),
+            pairingOverlay: overlay,
+            requiredStablePairingTopologyObservations: 2,
+            pairingTopologyRetryDelay: .seconds(60)
+        )
+
+        application.handleDeviceMatched(TouchDeviceIdentity(locationID: 1))
+        application.handleDeviceMatched(TouchDeviceIdentity(locationID: 2))
+        application.refreshDisplayMappings(reason: "test initial bounds")
+        right = display(id: 42, runtimeIdentifier: "RIGHT", x: 3_000)
+        application.refreshDisplayMappings(reason: "test changed bounds")
+        XCTAssertFalse(overlay.calls.contains(.show("LEFT", 1, 2)))
+
+        application.refreshDisplayMappings(reason: "test stable changed bounds")
+        XCTAssertTrue(overlay.calls.contains(.show("LEFT", 1, 2)))
+    }
+
     func testPairingOverlayRetriesUntilAppKitScreenBecomesReady() {
         let target = display(id: 41, runtimeIdentifier: "TARGET", x: 100)
         let resolver = DisplayResolver(activeDisplayProvider: { [target] })

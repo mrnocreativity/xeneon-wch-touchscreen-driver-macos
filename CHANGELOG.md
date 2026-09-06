@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Waits for a complete, stable one-to-one controller/display topology before showing reconnect calibration and keeps discovering missing video endpoints when macOS omits a useful display callback.
+- Revalidates fresh CoreGraphics identity and bounds against the explicit main and target `NSScreen` records before a pairing window can become visible.
+
 ## 1.1.0 - 2026-09-02
 
 - Renames the public project to Xeneon WCH Touchscreen Driver for macOS while preserving the installed executable, LaunchAgent, configuration, logs, and pairing paths for upgrade compatibility.
