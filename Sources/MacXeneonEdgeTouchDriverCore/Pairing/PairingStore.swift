@@ -266,7 +266,7 @@ public final class PairingStore {
             let data = try Data(contentsOf: url)
             if let legacy = try? JSONDecoder().decode(LegacyPairingFile.self, from: data),
                legacy.version < 2 {
-                DriverLoggers.log(.notice, category: .display, "Ignoring version-one runtime pairings; calibration will create supported version-two identities.")
+                DriverLoggers.log(.notice, category: .display, "Ignoring version-one runtime pairings; calibration will create supported current identities.")
                 pairings = []
                 return
             }
