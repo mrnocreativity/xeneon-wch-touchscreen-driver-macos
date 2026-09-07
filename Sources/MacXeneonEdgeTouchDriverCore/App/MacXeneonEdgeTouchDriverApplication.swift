@@ -43,6 +43,7 @@ public final class MacXeneonEdgeTouchDriverApplication {
     private var stuckGestureTimer: DispatchSourceTimer?
     private var signalSources: [DispatchSourceSignal] = []
     private var didRegisterDisplayCallback = false
+    private var isApplicationEventLoopRunning = false
     private var isRunning = false
 
     public convenience init(configuration: DriverConfiguration = .defaults) {
@@ -114,7 +115,9 @@ public final class MacXeneonEdgeTouchDriverApplication {
 
         scheduleDisplayReconciliation(reason: "startup", delay: .milliseconds(500))
 
-        CFRunLoopRun()
+        isApplicationEventLoopRunning = true
+        NSApp.run()
+        isApplicationEventLoopRunning = false
         return EXIT_SUCCESS
     }
 
@@ -138,7 +141,7 @@ public final class MacXeneonEdgeTouchDriverApplication {
         signalSources.removeAll()
         isRunning = false
         DriverLoggers.log(.notice, category: .lifecycle, "Stopped multi-display touch driver.")
-        CFRunLoopStop(CFRunLoopGetMain())
+        stopApplicationEventLoop()
     }
 
     func handleDisplayReconfiguration(
@@ -666,6 +669,32 @@ public final class MacXeneonEdgeTouchDriverApplication {
             source.setEventHandler { [weak self] in self?.stop() }
             source.resume()
             return source
+        }
+    }
+
+    private func stopApplicationEventLoop() {
+        guard isApplicationEventLoopRunning else { return }
+
+        let stopAndWake = {
+            NSApp.stop(nil)
+            guard let wakeEvent = NSEvent.otherEvent(
+                with: .applicationDefined,
+                location: .zero,
+                modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: 0,
+                context: nil,
+                subtype: 0,
+                data1: 0,
+                data2: 0
+            ) else { return }
+            NSApp.postEvent(wakeEvent, atStart: false)
+        }
+
+        if Thread.isMainThread {
+            stopAndWake()
+        } else {
+            DispatchQueue.main.async(execute: stopAndWake)
         }
     }
 
