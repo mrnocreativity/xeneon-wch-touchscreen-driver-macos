@@ -261,6 +261,9 @@ public final class MacXeneonEdgeTouchDriverApplication {
         timestamp: DispatchTime,
         event: TouchEvent?
     ) {
+        guard connectedDevices.contains(device), let session = sessions[device] else { return }
+        session.receivedReports &+= 1
+        session.lastReportAt = timestamp.uptimeNanoseconds
         if let event {
             handleTouchEvent(DeviceTouchEvent(device: device, touch: event))
             return
@@ -273,13 +276,22 @@ public final class MacXeneonEdgeTouchDriverApplication {
         // Late queued reports must never resurrect a removed endpoint.
         guard connectedDevices.contains(event.device) else { return }
         guard let session = sessions[event.device] else { return }
-        guard !sleeping, !configurationPending else { return }
+        session.lifecycleEvents &+= 1
+        session.lastEvent = event.touch
+        session.inputDisposition = "received"
+        guard !sleeping, !configurationPending else {
+            session.inputDisposition = "topology_or_sleep_suspended"
+            return
+        }
         if !observationGate.isFresh {
             loseObservation(reason: "AppKit heartbeat expired")
+            session.inputDisposition = "heartbeat_expired"
             return
         }
 
         let validation = session.validator.process(event.touch)
+        session.validatedEvents &+= UInt64(validation.events.count)
+        session.inputDisposition = validation.events.isEmpty ? "validator_waiting_or_filtered" : "validated"
         if let trigger = validation.stormStarted {
             suppressedUntilUp.remove(event.device)
             DriverLoggers.log(
@@ -527,7 +539,6 @@ public final class MacXeneonEdgeTouchDriverApplication {
         pairingTarget = target
         challenge = PairingChallenge(readyAt: DispatchTime.now().uptimeNanoseconds, generation: generation)
         for device in unresolved { setAuthority(device, phase: .calibrating, reason: "Touch and release both visible targets") }
-        armChallengeTimeout()
         DriverLoggers.log(.notice, category: .display, "Waiting for a raw touch on display ID \(target.displayID).")
     }
 
@@ -555,15 +566,25 @@ public final class MacXeneonEdgeTouchDriverApplication {
             scheduleDisplayReconciliation(reason: "Calibration placement revalidation")
             return
         }
+        let hadContact = challenge.hasContact
         let result = challenge.consume(event)
         self.challenge = challenge
+        sessions[event.device]?.inputDisposition = challenge.decision
+        if result != .waiting || !hadContact {
+            DriverLoggers.log(.notice, category: .display,
+                "Calibration input on \(event.device.hexadecimalLocationID), target \(challenge.targetIndex + 1): \(challenge.decision).")
+        }
         switch result {
-        case .waiting: return
+        case .waiting:
+            if !hadContact, challenge.hasContact { armChallengeTimeout() }
+            return
         case .rejected:
             cancelPairingPresentation()
             scheduleDisplayReconciliation(reason: "Calibration contact rejected; start again")
             return
         case .nextTarget:
+            challengeTimeout?.cancel()
+            challengeTimeout = nil
             let step = authority.values.filter { $0.phase == .active }.count + 1
             guard pairingOverlay.showTarget(on: target, step: step, total: compatibleDisplays.count, targetIndex: 1) else {
                 cancelPairingPresentation()
@@ -571,7 +592,6 @@ public final class MacXeneonEdgeTouchDriverApplication {
                 return
             }
             self.challenge?.readyAt = DispatchTime.now().uptimeNanoseconds
-            armChallengeTimeout()
             return
         case .complete: break
         }
@@ -808,13 +828,13 @@ public final class MacXeneonEdgeTouchDriverApplication {
         let expectedGeneration = generation
         let expectedReadyAt = challenge?.readyAt
         let work = DispatchWorkItem { [weak self] in
-            guard let self, self.generation == expectedGeneration, self.challenge != nil,
+            guard let self, self.generation == expectedGeneration, self.challenge?.hasContact == true,
                   self.challenge?.readyAt == expectedReadyAt else { return }
             self.cancelPairingPresentation()
-            self.scheduleDisplayReconciliation(reason: "Calibration timed out; release fingers and retry")
+            self.scheduleDisplayReconciliation(reason: "Calibration contact was not released; release fingers and retry")
         }
         challengeTimeout = work
-        gestureQueue.asyncAfter(deadline: .now() + .seconds(15), execute: work)
+        gestureQueue.asyncAfter(deadline: .now() + .seconds(2), execute: work)
     }
 
     func handleControlCommand(_ command: String) -> String {
@@ -848,6 +868,20 @@ public final class MacXeneonEdgeTouchDriverApplication {
                 "reason": current?.reason ?? "No observation",
                 "generation": current?.generation ?? generation
             ]
+            if let session = sessions[device] {
+                record["receivedReports"] = session.receivedReports
+                record["lifecycleEvents"] = session.lifecycleEvents
+                record["validatedEvents"] = session.validatedEvents
+                record["inputDisposition"] = session.inputDisposition
+                record["stormActive"] = session.validator.isStormActive
+                if let timestamp = session.lastReportAt {
+                    let now = DispatchTime.now().uptimeNanoseconds
+                    record["lastReportAgeMs"] = now >= timestamp ? (now - timestamp) / 1_000_000 : 0
+                }
+                if let event = session.lastEvent {
+                    record["lastEvent"] = ["kind": String(describing: event.kind), "rawX": event.rawX, "rawY": event.rawY]
+                }
+            }
             if let display, current?.phase == .active {
                 record["displayID"] = display.displayID
                 record["bounds"] = ["x": display.bounds.minX, "y": display.bounds.minY,
@@ -857,6 +891,7 @@ public final class MacXeneonEdgeTouchDriverApplication {
         }
         return json(["pid": getpid(), "generation": generation, "controllers": records,
                      "calibrationPaused": calibrationPaused, "heartbeatFresh": observationGate.isFresh,
+                     "routingGateOpen": observationGate.allowsRouting,
                      "target": pairingTarget?.displayID as Any? ?? NSNull(),
                      "targetStep": challenge.map { $0.targetIndex + 1 } as Any? ?? NSNull()])
     }
@@ -1090,6 +1125,12 @@ private struct PairingEndpointDescriptor: Equatable {
 }
 
 private final class DeviceTouchSession {
+    var receivedReports: UInt64 = 0
+    var lifecycleEvents: UInt64 = 0
+    var validatedEvents: UInt64 = 0
+    var lastReportAt: UInt64?
+    var lastEvent: TouchEvent?
+    var inputDisposition = "no_reports_received"
     let mapperStore: CoordinateMapperStore
     let gesture: GestureController
     let validator: TouchStreamValidator

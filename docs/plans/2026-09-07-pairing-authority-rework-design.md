@@ -27,6 +27,10 @@ Require two complete touch/release contacts at distinct visible normalized panel
 targets from the same controller. Contacts must begin after each target is ready.
 Wrong-target contacts, competing controllers, noise, timeout, or topology change
 restart the attempt. No calibration contact creates synthetic mouse input.
+Waiting for the user is not a contact timeout: keep each untouched target stable
+indefinitely. Only an in-progress contact has a two-second release deadline.
+Status must distinguish raw reports, parsed lifecycle events, validated contacts,
+and calibration decisions so a silent prompt has a diagnosable cause.
 Revalidate the visible overlay and topology before committing. Publish an active
 association only after atomic persistence succeeds.
 
@@ -71,3 +75,12 @@ observation gaps is required and this limitation must remain documented.
   placed the initial prompt on a touch display, not the main monitor.
 - Physical completion on both panels and a subsequent cable/sleep/wake acceptance
   sequence remain user-dependent and are not claimed by these automated checks.
+
+Follow-up: physical use exposed an idle 15-second restart loop and insufficient
+input diagnostics. The idle deadline is removed; contact-release protection
+remains. 111 warning-clean tests pass, including a real-time regression beyond
+the former deadline and status counters exercised through HID-report ingestion.
+The signed follow-up was installed and the live prompt remained stable. At that
+check the new process had received zero relevant HID reports; the cause of the
+reported missing touches and physical acceptance remain unresolved, not inferred
+from successful UI or command checks.

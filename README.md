@@ -196,7 +196,7 @@ Ambiguous associations are trusted only during uninterrupted observation by the 
 
 Display position is never used as identity. CoreGraphics and AppKit notifications suspend routing and cancel queued gesture work before reconciliation. Bounds-only rearrangement and resolution changes preserve verified associations during uninterrupted observation and update their coordinate mapping. Endpoint membership changes revoke ambiguous associations together. During reconnect, the driver re-enumerates incomplete controller/display sets and requires the complete one-to-one topology to remain unchanged across consecutive observations before calibration begins.
 
-The overlay is shown only after fresh CoreGraphics identity and bounds agree with the explicit main and target `NSScreen` records. Each calibration contact rechecks visible placement and the full observed topology. Wrong-target or competing contacts, incoherent input, topology changes, and timeouts restart the attempt. A storming controller cannot authorize pairing.
+The overlay is shown only after fresh CoreGraphics identity and bounds agree with the explicit main and target `NSScreen` records. Each calibration contact rechecks visible placement and the full observed topology. Wrong-target or competing contacts, incoherent input, topology changes, and an unreleased contact restart the attempt. An untouched target stays in place indefinitely; only an in-progress contact has a two-second release deadline. A storming controller cannot authorize pairing.
 
 The driver checks live HID/display inventories and AppKit responsiveness once per second. A heartbeat older than four seconds blocks routing immediately and revokes ambiguous authority during recovery. No software can detect a physically indistinguishable endpoint swap that produces no observable notification or inventory change; `re-pair` provides explicit recovery when the physical association is wrong despite apparently unchanged state.
 
@@ -210,7 +210,7 @@ Run these commands against the installed driver; they do not start a second HID 
 "$HOME/Library/Application Support/MacXeneonEdgeTouchDriver/bin/MacXeneonEdgeTouchDriver" cancel-pairing
 ```
 
-`status` returns JSON with each controller's state and reason, active display bounds, observation generation, heartbeat freshness, and calibration target. States are `waitingForHardware`, `needsPairing`, `calibrating`, `active`, and `suspended`; only `active` can route input. Status includes local identifiers, so redact it before sharing publicly.
+`status` returns JSON with each controller's state and reason, active display bounds, observation generation, heartbeat freshness, and calibration target. Input diagnostics include received-report, parsed-event, and validated-event counts, the latest event and report age, storm state, and input disposition. They distinguish missing reports from validation or calibration rejection. States are `waitingForHardware`, `needsPairing`, `calibrating`, `active`, and `suspended`; only `active` can route input. Status includes local identifiers and touch coordinates, so redact it before sharing publicly.
 
 `re-pair` revokes all assignments and starts the canonical physical flow once topology is ready. `cancel-pairing` hides calibration and keeps unresolved input disabled; already-verified screens continue working. Use `re-pair` to resume. Commands use a user-private local socket and acknowledge within a bounded timeout; an unreachable driver reports an error rather than editing its files.
 

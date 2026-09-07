@@ -3,6 +3,37 @@ import CoreGraphics
 import XCTest
 
 final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
+    func testIdleCalibrationKeepsSamePromptBeyondFormerRestartDeadline() {
+        let target = display(id: 41, runtimeIdentifier: "LEFT", x: 0)
+        let overlay = ApplicationRecordingPairingOverlay()
+        let app = recoveryApplication(store: pairingStore(), overlay: overlay, displays: { [target] })
+        app.handleDeviceMatched(TouchDeviceIdentity(locationID: 1))
+        app.refreshDisplayMappings(reason: "test idle calibration")
+        let calls = overlay.calls
+        waitForAsyncWork(milliseconds: 16_000)
+        XCTAssertEqual(overlay.calls, calls)
+        XCTAssertTrue(app.handleControlCommand("status").contains("calibrating"))
+    }
+
+    func testStatusDistinguishesRawReportsAndValidatedCalibrationContacts() throws {
+        let target = display(id: 41, runtimeIdentifier: "LEFT", x: 0)
+        let device = TouchDeviceIdentity(locationID: 1)
+        let app = recoveryApplication(store: pairingStore(), displays: { [target] })
+        app.handleDeviceMatched(device)
+        app.refreshDisplayMappings(reason: "test input diagnostics")
+        let start = DispatchTime.now().uptimeNanoseconds + 1_000_000
+        for (kind, offset) in [(TouchEvent.Kind.down, UInt64(0)), (.up, 80_000_000)] {
+            let event = deviceEvent(device, kind, rawX: 4_096, rawY: 4_800, timestampNanoseconds: start + offset)
+            app.handleHIDReport(device: device, timestamp: event.touch.timestamp, event: event.touch)
+        }
+        let status = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(app.handleControlCommand("status").utf8)) as? [String: Any])
+        let record = try XCTUnwrap((status["controllers"] as? [[String: Any]])?.first)
+        XCTAssertEqual(record["receivedReports"] as? Int, 2)
+        XCTAssertEqual(record["validatedEvents"] as? Int, 2)
+        XCTAssertEqual(record["inputDisposition"] as? String, "target_confirmed")
+        XCTAssertEqual(status["targetStep"] as? Int, 2)
+    }
+
     func testObservationGapRevokesBothAmbiguousMappingsAndRequiresCalibration() throws {
         let displays = [display(id: 41, runtimeIdentifier: "LEFT", x: 0), display(id: 42, runtimeIdentifier: "RIGHT", x: 2_000)]
         let devices = [TouchDeviceIdentity(locationID: 1), TouchDeviceIdentity(locationID: 2)]

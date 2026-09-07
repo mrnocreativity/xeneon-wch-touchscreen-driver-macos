@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Keeps idle calibration targets stable instead of restarting every 15 seconds; only an in-progress contact has a release deadline. Adds input-stage counters and calibration decisions to diagnose silent prompts.
 - Adds explicit pairing authority states, observation generations, immediate routing suspension, and cancellation of stale gesture/recovery work.
 - Requires two fresh physical target contacts and verified overlay/topology state before atomically committing calibration; old pairing schemas require recalibration.
 - Limits ambiguous mappings to uninterrupted process observation, with conservative recovery after restart, sleep/wake, membership changes, or responsiveness gaps.
