@@ -1,5 +1,10 @@
 # Pairing authority and recovery
 
+The [single-touch storm-safe follow-up](2026-09-08-single-touch-storm-safe-pairing-design.md)
+supersedes the two-target interaction below and closes the storm admission and
+touch-driven reconciliation paths. This document retains the original design
+and its dated verification history.
+
 Approved scope: replace implicit mapper-based permission with explicit pairing
 states. Keep existing HID parsing and ordinary gesture behavior.
 

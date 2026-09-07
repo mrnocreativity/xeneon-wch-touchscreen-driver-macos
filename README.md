@@ -186,17 +186,19 @@ All fields are optional. Missing or malformed config falls back to defaults and 
 
 ## Pairing Multiple Displays
 
-When a controller has no verified assignment, the driver covers one compatible display with **Touch and release the circle**. Touch and release the first circle, then the second circle on that same physical panel. Repeat for the next display. Both contacts must come from the same controller, begin after their target appears, stay near the target, and complete within two seconds. Calibration does not generate mouse clicks. Verified associations are saved atomically in:
+When a controller has no verified assignment, the driver covers one compatible display with **Touch and release the circle**. Touch and release the central circle once, then repeat when the prompt moves to the next display. The physical contact must begin after the target appears, stay near it, and complete within two seconds. Calibration does not generate mouse clicks. Verified associations are saved atomically in:
 
 ```text
 ~/Library/Application Support/MacXeneonEdgeTouchDriver/pairings.json
 ```
 
-Ambiguous associations are trusted only during uninterrupted observation by the current driver process. Identical controllers with duplicate serials and displays with a zero EDID serial—such as the tested Prechen panels—require physical pairing after a driver restart, sleep/wake, reconnect, or observation gap. Associations can restore across those boundaries only when both endpoints expose public hardware identities that remain unique. Upgrading from an older pairing schema requires the new physical calibration flow once, including for hardware-scoped records.
+Ambiguous associations are trusted only during uninterrupted observation by the current driver process. Identical controllers with duplicate serials and displays with a zero EDID serial—such as the tested Prechen panels—require physical pairing after a driver restart, sleep/wake, reconnect, or observation gap. Associations can restore across those boundaries only when both endpoints expose public hardware identities that remain unique. Upgrading from an older pairing schema or calibration revision requires the current physical flow once, including for hardware-scoped records.
 
 Display position is never used as identity. CoreGraphics and AppKit notifications suspend routing and cancel queued gesture work before reconciliation. Bounds-only rearrangement and resolution changes preserve verified associations during uninterrupted observation and update their coordinate mapping. Endpoint membership changes revoke ambiguous associations together. During reconnect, the driver re-enumerates incomplete controller/display sets and requires the complete one-to-one topology to remain unchanged across consecutive observations before calibration begins.
 
 The overlay is shown only after fresh CoreGraphics identity and bounds agree with the explicit main and target `NSScreen` records. Each calibration contact rechecks visible placement and the full observed topology. Wrong-target or competing contacts, incoherent input, topology changes, and an unreleased contact restart the attempt. An untouched target stays in place indefinitely; only an in-progress contact has a two-second release deadline. A storming controller cannot authorize pairing.
+
+Touch traffic never starts calibration or advances topology-stability observations. If an unresolved controller enters storm mode, the prompt closes once and pairing waits for all unresolved controllers to recover through the normal quiet-period check. Recovered samples within an ongoing storm cannot pair a display or reopen the prompt. Display rearrangement preserves storm evidence; an already-paired controller's storm does not restart another controller's calibration. The existing confidence-tracking policy for ordinary input on paired controllers is unchanged.
 
 The driver checks live HID/display inventories and AppKit responsiveness once per second. A heartbeat older than four seconds blocks routing immediately and revokes ambiguous authority during recovery. No software can detect a physically indistinguishable endpoint swap that produces no observable notification or inventory change; `re-pair` provides explicit recovery when the physical association is wrong despite apparently unchanged state.
 
@@ -254,5 +256,5 @@ See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for authorship, license lin
 - If HID open fails, check Input Monitoring permission and confirm no other process has seized the same VID/PID device.
 - If a panel model is not detected, run `swift run DisplayInfo` and adjust the optional display config override.
 - On identical panels without unique public serials, calibration after a restart, sleep/wake, reconnect, or observation gap is intentional. The driver will not guess from screen order or position.
-- If touch reaches the wrong panel, use the installed driver's `re-pair` command above, then complete both physical targets on each prompted screen. Do not manually edit or delete saved mappings.
+- If touch reaches the wrong panel, use the installed driver's `re-pair` command above, then touch and release the target once on each prompted screen. Do not manually edit or delete saved mappings.
 - For HID investigation, use `swift run HIDDump`; it intentionally runs in non-seize mode and is separate from the production daemon.

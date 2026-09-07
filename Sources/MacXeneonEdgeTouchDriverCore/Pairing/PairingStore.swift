@@ -13,6 +13,7 @@ public enum PairingScope: String, Codable, Equatable, Sendable {
 
 /// Persisted one-to-one association between a USB touch controller and a display.
 public struct TouchDisplayPairing: Codable, Equatable, Sendable {
+    static let currentCalibrationRevision = 3
     public let device: TouchDeviceIdentity
     public let displayID: CGDirectDisplayID
     public let displayVendorNumber: UInt32
@@ -38,7 +39,7 @@ public struct TouchDisplayPairing: Codable, Equatable, Sendable {
         self.bootSessionIdentifier = bootSessionIdentifier
         self.scope = scope
         self.observationSession = observationSession
-        self.calibrationRevision = 2
+        self.calibrationRevision = Self.currentCalibrationRevision
     }
 
     var displayHardwareKey: String? {
@@ -121,7 +122,7 @@ public final class PairingStore {
         if let exact = pairings.first(where: {
             $0.scope == .bootSession &&
             $0.observationSession == observationSession &&
-            $0.calibrationRevision == 2 &&
+            $0.calibrationRevision == TouchDisplayPairing.currentCalibrationRevision &&
             $0.bootSessionIdentifier == bootSessionIdentifier &&
             runtimeDevice($0.device, matches: device)
         }), let display = displays.first(where: {
@@ -304,7 +305,7 @@ public final class PairingStore {
                 return
             }
             let bootCompatiblePairings = decoded.pairings.filter {
-                $0.calibrationRevision == 2 &&
+                $0.calibrationRevision == TouchDisplayPairing.currentCalibrationRevision &&
                 ($0.scope == .hardware || $0.observationSession == observationSession)
             }
             let retainedPairings = bootCompatiblePairings.filter {

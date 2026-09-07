@@ -45,3 +45,22 @@ this change does not claim to eliminate upstream controller/power faults.
    process, responsive status, and stable waiting at the first physical target.
    The user is away: do not generate touches or manually modify saved mappings.
    Physical completion and reconnect acceptance remain explicitly unverified.
+
+## Verification receipt
+
+- 119 tests pass with warnings treated as errors, including storm reacquisition,
+  fresh-down provenance, independent controller cleanup, and the idle-prompt
+  regression. The release build is also warning-clean; script syntax, LaunchAgent
+  plist lint, and whitespace checks pass.
+- The canonical installer built, signed, and restarted the driver. Strict
+  signature verification passed, the installed executable's build UUID matched
+  the release artifact, and the fresh process exposed responsive status.
+- Unattended first-target acceptance was not established: both controllers
+  reported target contacts after startup and again after canonical `re-pair`.
+  No agent-generated input was used. These reports do not establish deliberate
+  human touches or physically correct routing, and their cause is unconfirmed.
+- Because the user was unavailable for physical verification, canonical
+  `re-pair` followed by `cancel-pairing` revoked those associations and left the
+  driver running with pairing paused and both controllers suspended. Resume with
+  `re-pair` when physical verification is possible. No runtime files were edited
+  manually. Physical reconnect and unexpected-contact investigation remain open.

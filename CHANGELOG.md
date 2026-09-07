@@ -2,9 +2,11 @@
 
 ## Unreleased
 
+- Restores one central touch-and-release per display. Centralizes storm-safe calibration admission, keeps touch reports out of topology reconciliation, and waits for unresolved controllers to recover without repeatedly reopening prompts.
+- Preserves storm evidence across display-only changes and isolates each controller's gesture-cleanup timer. Earlier calibration revisions require fresh pairing through the corrected flow.
 - Keeps idle calibration targets stable instead of restarting every 15 seconds; only an in-progress contact has a release deadline. Adds input-stage counters and calibration decisions to diagnose silent prompts.
 - Adds explicit pairing authority states, observation generations, immediate routing suspension, and cancellation of stale gesture/recovery work.
-- Requires two fresh physical target contacts and verified overlay/topology state before atomically committing calibration; old pairing schemas require recalibration.
+- Requires a fresh physical target contact and verified overlay/topology state before atomically committing calibration; old pairing schemas require recalibration.
 - Limits ambiguous mappings to uninterrupted process observation, with conservative recovery after restart, sleep/wake, membership changes, or responsiveness gaps.
 - Adds driver-owned `status`, `re-pair`, and `cancel-pairing` commands through a user-private local socket, plus periodic endpoint inventory and AppKit heartbeat checks.
 - Waits for a complete, stable one-to-one controller/display topology before showing reconnect calibration and keeps discovering missing video endpoints when macOS omits a useful display callback.

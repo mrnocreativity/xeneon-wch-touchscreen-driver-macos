@@ -11,12 +11,11 @@ struct PairingAuthority {
     var generation: UInt64
 }
 
-/// Two fresh target contacts, measured in panel-local normalized coordinates.
+/// One fresh target contact, measured in panel-local normalized coordinates.
 /// No synthetic pointer position is used to infer which device was touched.
 struct PairingChallenge {
-    static let targets = [CGPoint(x: 0.25, y: 0.5), CGPoint(x: 0.75, y: 0.5)]
-    enum Result { case waiting, nextTarget, complete, rejected }
-    private(set) var targetIndex = 0
+    static let target = CGPoint(x: 0.5, y: 0.5)
+    enum Result { case waiting, complete, rejected }
     private(set) var device: TouchDeviceIdentity?
     private var contactStarted: UInt64?
     var hasContact: Bool { contactStarted != nil }
@@ -41,7 +40,7 @@ struct PairingChallenge {
         }
         let point = CoordinateMapper(displayBounds: CGRect(x: 0, y: 0, width: 1, height: 1))
             .map(rawX: touch.rawX, rawY: touch.rawY)
-        let target = Self.targets[targetIndex]
+        let target = Self.target
         guard abs(point.x - target.x) <= 0.08, abs(point.y - target.y) <= 0.12 else {
             decision = "outside_target"
             return .rejected
@@ -67,9 +66,7 @@ struct PairingChallenge {
             }
             contactStarted = nil
             decision = "target_confirmed"
-            if targetIndex == 1 { return .complete }
-            targetIndex = 1
-            return .nextTarget
+            return .complete
         }
     }
 }

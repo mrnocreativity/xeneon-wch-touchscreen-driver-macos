@@ -4,6 +4,22 @@ import Foundation
 import XCTest
 
 final class PairingStoreTests: XCTestCase {
+    func testOlderCalibrationCannotBypassNewStormAdmissionPolicy() throws {
+        let url = temporaryURL()
+        let device = TouchDeviceIdentity(locationID: 1, serialNumber: "UNIQUE")
+        let display = makeDisplay(id: 41, serial: 99)
+        let store = PairingStore(url: url)
+        try store.assign(device: device, to: display, connectedDevices: [device], displays: [display])
+        var file = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        var records = try XCTUnwrap(file["pairings"] as? [[String: Any]])
+        records[0]["calibrationRevision"] = 2
+        file["pairings"] = records
+        try JSONSerialization.data(withJSONObject: file).write(to: url)
+        let reloaded = PairingStore(url: url)
+        XCTAssertTrue(reloaded.pairings.isEmpty)
+        XCTAssertNil(reloaded.resolveDisplay(for: device, connectedDevices: [device], displays: [display]))
+    }
+
     func testFailedAssignmentDoesNotPublishInMemoryAuthority() throws {
         let url = temporaryURL()
         // A directory in place of the data file forces atomic persistence to fail.

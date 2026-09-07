@@ -6,7 +6,6 @@ import Foundation
 public protocol PairingOverlayPresenting: AnyObject {
     @discardableResult
     func show(on display: DisplaySnapshot, step: Int, total: Int) -> Bool
-    func showTarget(on display: DisplaySnapshot, step: Int, total: Int, targetIndex: Int) -> Bool
     func isReady(on display: DisplaySnapshot) -> Bool
     func showConfirmation(on display: DisplaySnapshot)
     func hide()
@@ -20,15 +19,11 @@ public final class PairingOverlayController: PairingOverlayPresenting {
 
     @discardableResult
     public func show(on display: DisplaySnapshot, step: Int, total: Int) -> Bool {
-        showTarget(on: display, step: step, total: total, targetIndex: 0)
-    }
-
-    public func showTarget(on display: DisplaySnapshot, step: Int, total: Int, targetIndex: Int) -> Bool {
         present(
             on: display,
             title: "Touch and release the circle",
-            detail: "Display \(step) of \(total) · Touch \(targetIndex + 1) of 2",
-            target: PairingChallenge.targets[targetIndex]
+            detail: "Display \(step) of \(total)",
+            target: PairingChallenge.target
         )
     }
 

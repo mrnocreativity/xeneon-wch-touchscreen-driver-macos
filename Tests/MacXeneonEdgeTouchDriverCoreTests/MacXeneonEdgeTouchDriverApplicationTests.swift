@@ -3,6 +3,171 @@ import CoreGraphics
 import XCTest
 
 final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
+    func testUnpairedStormDoesNotCancelOtherControllersStuckGestureTimer() throws {
+        let left = display(id: 41, runtimeIdentifier: "LEFT", x: 0)
+        let right = display(id: 42, runtimeIdentifier: "RIGHT", x: 2_000)
+        let healthy = TouchDeviceIdentity(locationID: 1)
+        let noisy = TouchDeviceIdentity(locationID: 2)
+        let store = pairingStore()
+        try store.assign(device: healthy, to: left, connectedDevices: [healthy, noisy], displays: [left, right])
+        var config = immediateConfiguration()
+        config.timing.stuckGestureTimeoutMs = 100
+        let input = ApplicationRecordingInputSink()
+        let app = MacXeneonEdgeTouchDriverApplication(configuration: config,
+            displayResolver: DisplayResolver(activeDisplayProvider: { [left, right] }), inputSink: input,
+            cursorController: ApplicationRecordingCursorController(), pairingStore: store,
+            pairingOverlay: ApplicationRecordingPairingOverlay())
+        app.handleDeviceMatched(healthy)
+        app.handleDeviceMatched(noisy)
+        app.refreshDisplayMappings(reason: "test independent cleanup")
+        let start = DispatchTime.now().uptimeNanoseconds + 1_000_000
+        app.handleTouchEvent(deviceEvent(healthy, .down, rawX: 8_192, rawY: 4_800, timestampNanoseconds: start))
+        app.handleTouchEvent(deviceEvent(healthy, .move, rawX: 8_192, rawY: 4_800, timestampNanoseconds: start + 50_000_000))
+        emitStormWithRecoveredContact(app, device: noisy, start: start)
+        waitForAsyncWork(milliseconds: 400)
+        XCTAssertTrue(input.calls.isEmpty, "The 100ms cleanup must cancel the pending 300ms hold-to-drag")
+    }
+
+    func testStormReacquisitionCannotPairOrChurnPromptAndQuietRecoveryResumes() throws {
+        let target = display(id: 41, runtimeIdentifier: "LEFT", x: 0)
+        let device = TouchDeviceIdentity(locationID: 1)
+        let store = pairingStore()
+        let overlay = ApplicationRecordingPairingOverlay()
+        let input = ApplicationRecordingInputSink()
+        let app = recoveryApplication(store: store, input: input, overlay: overlay, displays: { [target] })
+        app.handleDeviceMatched(device)
+        app.refreshDisplayMappings(reason: "test calibration ready")
+        let start = DispatchTime.now().uptimeNanoseconds + 1_000_000
+        emitStormWithRecoveredContact(app, device: device, start: start)
+        let blockedCalls = overlay.calls
+        for cycle in 1...4 {
+            emitStormWithRecoveredContact(app, device: device, start: start + UInt64(cycle) * 200_000_000)
+        }
+        waitForAsyncWork(milliseconds: 350)
+        XCTAssertEqual(overlay.calls, blockedCalls)
+        XCTAssertTrue(store.pairings.isEmpty)
+        XCTAssertTrue(input.calls.isEmpty)
+        let record = try statusRecords(app)[0]
+        XCTAssertEqual(record["stormActive"] as? Bool, true)
+        XCTAssertGreaterThan(record["validatedEvents"] as? Int ?? 0, 0, "Exercise recovered events, not only rejected reports")
+        XCTAssertEqual(record["state"] as? String, "suspended")
+        app.handleStormRecoveryTick(for: device, at: DispatchTime(uptimeNanoseconds: start + 2_000_000_000))
+        waitForAsyncWork(milliseconds: 350)
+        XCTAssertEqual(try statusRecords(app)[0]["state"] as? String, "calibrating")
+        performCalibration(app, device: device)
+        XCTAssertEqual(store.pairings.count, 1)
+        XCTAssertTrue(input.calls.isEmpty)
+    }
+
+    func testTouchTrafficCannotAdvanceTopologyStabilityOrCreatePrompt() {
+        let target = display(id: 41, runtimeIdentifier: "LEFT", x: 0)
+        let device = TouchDeviceIdentity(locationID: 1)
+        var inventoryReads = 0
+        let overlay = ApplicationRecordingPairingOverlay()
+        let app = MacXeneonEdgeTouchDriverApplication(configuration: immediateConfiguration(),
+            displayResolver: DisplayResolver(activeDisplayProvider: { inventoryReads += 1; return [target] }),
+            inputSink: ApplicationRecordingInputSink(), cursorController: ApplicationRecordingCursorController(),
+            pairingStore: pairingStore(), pairingOverlay: overlay, requiredStablePairingTopologyObservations: 2)
+        app.handleDeviceMatched(device)
+        app.refreshDisplayMappings(reason: "test first topology observation")
+        let reads = inventoryReads
+        let calls = overlay.calls
+        performCalibration(app, device: device)
+        XCTAssertEqual(inventoryReads, reads)
+        XCTAssertEqual(overlay.calls, calls)
+        app.refreshDisplayMappings(reason: "test second independent topology observation")
+        XCTAssertTrue(overlay.calls.contains(.show("LEFT", 1, 1)))
+    }
+
+    func testValidatorGeneratedDownCannotReplaceFreshPhysicalDown() throws {
+        let target = display(id: 41, runtimeIdentifier: "LEFT", x: 0)
+        let device = TouchDeviceIdentity(locationID: 1)
+        let store = pairingStore()
+        let app = recoveryApplication(store: store, displays: { [target] })
+        app.handleDeviceMatched(device)
+        app.refreshDisplayMappings(reason: "test target ready while finger already held")
+        let start = DispatchTime.now().uptimeNanoseconds + 1_000_000
+        app.handleTouchEvent(deviceEvent(device, .move, rawX: 8_192, rawY: 4_800, timestampNanoseconds: start))
+        app.handleTouchEvent(deviceEvent(device, .up, rawX: 8_192, rawY: 4_800, timestampNanoseconds: start + 80_000_000))
+        XCTAssertTrue(store.pairings.isEmpty)
+        XCTAssertGreaterThan(try statusRecords(app)[0]["validatedEvents"] as? Int ?? 0, 0)
+        performCalibration(app, device: device)
+        XCTAssertEqual(store.pairings.count, 1)
+    }
+
+    func testGeometryReconciliationPreservesStormEvidenceAndRecoveryTimer() throws {
+        var target = display(id: 41, runtimeIdentifier: "LEFT", x: 0)
+        let device = TouchDeviceIdentity(locationID: 1)
+        let store = pairingStore()
+        let app = recoveryApplication(store: store, displays: { [target] })
+        app.handleDeviceMatched(device)
+        app.refreshDisplayMappings(reason: "test initial topology")
+        emitStormWithRecoveredContact(app, device: device, start: DispatchTime.now().uptimeNanoseconds + 1_000_000)
+        target = display(id: 41, runtimeIdentifier: "LEFT", x: 2_000)
+        app.refreshDisplayMappings(reason: "test rearrangement during storm")
+        XCTAssertEqual(try statusRecords(app)[0]["stormActive"] as? Bool, true)
+        XCTAssertEqual(try statusRecords(app)[0]["state"] as? String, "suspended")
+        XCTAssertTrue(app.hasStormRecoveryTimer(for: device))
+        XCTAssertTrue(store.pairings.isEmpty)
+    }
+
+    func testAlreadyPairedStormDoesNotInterruptOtherControllersCalibration() throws {
+        let left = display(id: 41, runtimeIdentifier: "LEFT", x: 0)
+        let right = display(id: 42, runtimeIdentifier: "RIGHT", x: 2_000)
+        let paired = TouchDeviceIdentity(locationID: 1)
+        let unpaired = TouchDeviceIdentity(locationID: 2)
+        let store = pairingStore()
+        try store.assign(device: paired, to: left, connectedDevices: [paired, unpaired], displays: [left, right])
+        let overlay = ApplicationRecordingPairingOverlay()
+        let app = recoveryApplication(store: store, overlay: overlay, displays: { [left, right] })
+        app.handleDeviceMatched(paired)
+        app.handleDeviceMatched(unpaired)
+        app.refreshDisplayMappings(reason: "test second display calibration")
+        let calls = overlay.calls
+        emitStormWithRecoveredContact(app, device: paired, start: DispatchTime.now().uptimeNanoseconds + 1_000_000)
+        XCTAssertEqual(overlay.calls, calls)
+        performCalibration(app, device: unpaired)
+        XCTAssertEqual(store.resolveDisplay(for: unpaired, connectedDevices: [paired, unpaired], displays: [left, right]), right)
+    }
+
+    func testAllUnresolvedControllersMustLeaveStormBeforeCalibrationResumes() throws {
+        let displays = [display(id: 41, runtimeIdentifier: "LEFT", x: 0), display(id: 42, runtimeIdentifier: "RIGHT", x: 2_000)]
+        let devices = [TouchDeviceIdentity(locationID: 1), TouchDeviceIdentity(locationID: 2)]
+        let overlay = ApplicationRecordingPairingOverlay()
+        let app = recoveryApplication(store: pairingStore(), overlay: overlay, displays: { displays })
+        devices.forEach { app.handleDeviceMatched($0) }
+        app.refreshDisplayMappings(reason: "test ready")
+        let start = DispatchTime.now().uptimeNanoseconds + 1_000_000
+        devices.forEach { emitStormWithRecoveredContact(app, device: $0, start: start) }
+        let calls = overlay.calls
+        app.handleStormRecoveryTick(for: devices[0], at: DispatchTime(uptimeNanoseconds: start + 2_000_000_000))
+        waitForAsyncWork(milliseconds: 350)
+        XCTAssertEqual(overlay.calls, calls)
+        XCTAssertTrue(try statusRecords(app).allSatisfy { $0["state"] as? String == "suspended" })
+        app.handleStormRecoveryTick(for: devices[1], at: DispatchTime(uptimeNanoseconds: start + 2_000_000_000))
+        waitForAsyncWork(milliseconds: 350)
+        XCTAssertTrue(try statusRecords(app).allSatisfy { $0["state"] as? String == "calibrating" })
+    }
+
+    private func emitStormWithRecoveredContact(_ app: MacXeneonEdgeTouchDriverApplication,
+                                                device: TouchDeviceIdentity, start: UInt64) {
+        let reports: [(TouchEvent.Kind, Int, Int, UInt64)] = [
+            (.down, 10_410, 6_120, 0), (.move, 11_264, 4_533, 8_000_000),
+            (.down, 8_192, 4_800, 20_000_000), (.move, 200, 9_000, 28_000_000),
+            (.move, 8_193, 4_800, 36_000_000), (.move, 15_000, 300, 44_000_000),
+            (.move, 8_194, 4_801, 52_000_000), (.move, 8_195, 4_802, 68_000_000),
+            (.up, 8_195, 4_802, 84_000_000)
+        ]
+        for (kind, x, y, offset) in reports {
+            app.handleTouchEvent(deviceEvent(device, kind, rawX: x, rawY: y, timestampNanoseconds: start + offset))
+        }
+    }
+
+    private func statusRecords(_ app: MacXeneonEdgeTouchDriverApplication) throws -> [[String: Any]] {
+        let status = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(app.handleControlCommand("status").utf8)) as? [String: Any])
+        return try XCTUnwrap(status["controllers"] as? [[String: Any]])
+    }
+
     func testIdleCalibrationKeepsSamePromptBeyondFormerRestartDeadline() {
         let target = display(id: 41, runtimeIdentifier: "LEFT", x: 0)
         let overlay = ApplicationRecordingPairingOverlay()
@@ -23,7 +188,7 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
         app.refreshDisplayMappings(reason: "test input diagnostics")
         let start = DispatchTime.now().uptimeNanoseconds + 1_000_000
         for (kind, offset) in [(TouchEvent.Kind.down, UInt64(0)), (.up, 80_000_000)] {
-            let event = deviceEvent(device, kind, rawX: 4_096, rawY: 4_800, timestampNanoseconds: start + offset)
+            let event = deviceEvent(device, kind, rawX: 8_192, rawY: 4_800, timestampNanoseconds: start + offset)
             app.handleHIDReport(device: device, timestamp: event.touch.timestamp, event: event.touch)
         }
         let status = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(app.handleControlCommand("status").utf8)) as? [String: Any])
@@ -31,7 +196,8 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
         XCTAssertEqual(record["receivedReports"] as? Int, 2)
         XCTAssertEqual(record["validatedEvents"] as? Int, 2)
         XCTAssertEqual(record["inputDisposition"] as? String, "target_confirmed")
-        XCTAssertEqual(status["targetStep"] as? Int, 2)
+        XCTAssertEqual(record["state"] as? String, "active")
+        XCTAssertTrue(status["targetStep"] is NSNull)
     }
 
     func testObservationGapRevokesBothAmbiguousMappingsAndRequiresCalibration() throws {
@@ -209,6 +375,7 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
 
         application.handleDeviceMatched(first)
         application.handleDeviceMatched(second)
+        application.refreshDisplayMappings(reason: "test initial mappings")
         application.handleTouchEvent(deviceEvent(first, .down, rawX: 0, rawY: 0))
         application.handleTouchEvent(deviceEvent(first, .up, rawX: 0, rawY: 0))
         application.handleTouchEvent(deviceEvent(second, .down, rawX: 0, rawY: 0))
@@ -244,6 +411,7 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
 
         application.handleDeviceMatched(storming)
         application.handleDeviceMatched(healthy)
+        application.refreshDisplayMappings(reason: "test initial mappings")
         application.handleTouchEvent(deviceEvent(
             storming,
             .down,
@@ -306,6 +474,7 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
         )
         application.handleDeviceMatched(device)
 
+        application.refreshDisplayMappings(reason: "test initial mapping")
         let reports: [(TouchEvent.Kind, Int, Int, UInt64)] = [
             (.down, 10_410, 6_120, 1_000_000_000),
             (.move, 11_264, 4_533, 1_008_000_000),
@@ -338,7 +507,7 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
         application.handleDeviceRemoval(device)
     }
 
-    func testTwoTargetCalibrationPairsWithoutSyntheticInput() {
+    func testSingleTargetCalibrationPairsWithoutSyntheticInput() {
         let target = display(id: 41, runtimeIdentifier: "TARGET", x: 100)
         let resolver = DisplayResolver(activeDisplayProvider: { [target] })
         let store = pairingStore()
@@ -386,6 +555,7 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
 
         application.handleDeviceMatched(paired)
         application.handleDeviceMatched(unpaired)
+        application.refreshDisplayMappings(reason: "test initial mappings")
         application.handleTouchEvent(deviceEvent(paired, .down, rawX: 0, rawY: 0))
 
         XCTAssertEqual(
@@ -420,6 +590,7 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
             pairingOverlay: ApplicationRecordingPairingOverlay()
         )
         application.handleDeviceMatched(device)
+        application.refreshDisplayMappings(reason: "test initial mapping")
         application.handleTouchEvent(deviceEvent(device, .down, rawX: 0, rawY: 0))
         application.handleTouchEvent(deviceEvent(device, .up, rawX: 0, rawY: 0))
 
@@ -684,11 +855,9 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
     }
 
     private func performCalibration(_ application: MacXeneonEdgeTouchDriverApplication, device: TouchDeviceIdentity) {
-        for x in [4_096, 12_287] {
-            let start = DispatchTime.now().uptimeNanoseconds + 1_000_000
-            application.handleTouchEvent(deviceEvent(device, .down, rawX: x, rawY: 4_800, timestampNanoseconds: start))
-            application.handleTouchEvent(deviceEvent(device, .up, rawX: x, rawY: 4_800, timestampNanoseconds: start + 80_000_000))
-        }
+        let start = DispatchTime.now().uptimeNanoseconds + 1_000_000
+        application.handleTouchEvent(deviceEvent(device, .down, rawX: 8_192, rawY: 4_800, timestampNanoseconds: start))
+        application.handleTouchEvent(deviceEvent(device, .up, rawX: 8_192, rawY: 4_800, timestampNanoseconds: start + 80_000_000))
     }
 
     private func immediateConfiguration() -> DriverConfiguration {
@@ -808,9 +977,6 @@ private final class ApplicationRecordingPairingOverlay: PairingOverlayPresenting
             return false
         }
         return canShow
-    }
-    func showTarget(on display: DisplaySnapshot, step: Int, total: Int, targetIndex: Int) -> Bool {
-        show(on: display, step: step, total: total)
     }
     func isReady(on display: DisplaySnapshot) -> Bool { ready }
     func showConfirmation(on display: DisplaySnapshot) {
