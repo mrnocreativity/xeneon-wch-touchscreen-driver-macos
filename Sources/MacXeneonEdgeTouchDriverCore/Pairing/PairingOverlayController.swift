@@ -6,6 +6,8 @@ import Foundation
 public protocol PairingOverlayPresenting: AnyObject {
     @discardableResult
     func show(on display: DisplaySnapshot, step: Int, total: Int) -> Bool
+    func showTarget(on display: DisplaySnapshot, step: Int, total: Int, targetIndex: Int) -> Bool
+    func isReady(on display: DisplaySnapshot) -> Bool
     func showConfirmation(on display: DisplaySnapshot)
     func hide()
 }
@@ -18,11 +20,28 @@ public final class PairingOverlayController: PairingOverlayPresenting {
 
     @discardableResult
     public func show(on display: DisplaySnapshot, step: Int, total: Int) -> Bool {
+        showTarget(on: display, step: step, total: total, targetIndex: 0)
+    }
+
+    public func showTarget(on display: DisplaySnapshot, step: Int, total: Int, targetIndex: Int) -> Bool {
         present(
             on: display,
-            title: "Touch this display",
-            detail: "Pairing touchscreen \(step) of \(total)"
+            title: "Touch and release the circle",
+            detail: "Display \(step) of \(total) · Touch \(targetIndex + 1) of 2",
+            target: PairingChallenge.targets[targetIndex]
         )
+    }
+
+    public func isReady(on display: DisplaySnapshot) -> Bool {
+        runOnMainReturning { [weak self] in
+            guard let window = self?.window, window.isVisible,
+                  CGDisplayIsActive(display.displayID) != 0,
+                  Self.displayID(for: window.screen) == display.displayID,
+                  let screen = window.screen else { return false }
+            let current = Self.snapshot(for: display.displayID)
+            return PairingOverlayGeometry.snapshotsMatch(display, current) &&
+                PairingOverlayGeometry.framesMatch(window.frame, screen.frame)
+        }
     }
 
     public func showConfirmation(on display: DisplaySnapshot) {
@@ -36,7 +55,7 @@ public final class PairingOverlayController: PairingOverlayPresenting {
         }
     }
 
-    private func present(on display: DisplaySnapshot, title: String, detail: String) -> Bool {
+    private func present(on display: DisplaySnapshot, title: String, detail: String, target: CGPoint? = nil) -> Bool {
         runOnMainReturning { [weak self] in
             let screens = NSScreen.screens
             let mainDisplayID = CGMainDisplayID()
@@ -95,7 +114,7 @@ public final class PairingOverlayController: PairingOverlayPresenting {
             window.hasShadow = false
             window.ignoresMouseEvents = true
             window.collectionBehavior = [.fullScreenAuxiliary, .stationary]
-            window.contentView = PairingOverlayView(title: title, detail: detail)
+            window.contentView = PairingOverlayView(title: title, detail: detail, target: target)
             window.setFrame(expectedFrame, display: true)
 
             guard Self.displayID(for: window.screen) == display.displayID,
@@ -111,6 +130,12 @@ public final class PairingOverlayController: PairingOverlayPresenting {
 
             self.window = window
             window.orderFrontRegardless()
+            guard window.isVisible, Self.displayID(for: window.screen) == display.displayID,
+                  PairingOverlayGeometry.framesMatch(window.frame, expectedFrame) else {
+                window.orderOut(nil)
+                self.window = nil
+                return false
+            }
             return true
         }
     }
@@ -199,10 +224,12 @@ enum PairingOverlayGeometry {
 private final class PairingOverlayView: NSView {
     private let titleText: String
     private let detailText: String
+    private let target: CGPoint?
 
-    init(title: String, detail: String) {
+    init(title: String, detail: String, target: CGPoint?) {
         self.titleText = title
         self.detailText = detail
+        self.target = target
         super.init(frame: .zero)
         wantsLayer = true
     }
@@ -217,7 +244,6 @@ private final class PairingOverlayView: NSView {
         NSColor(calibratedWhite: 0.035, alpha: 1).setFill()
         dirtyRect.fill()
 
-        let center = CGPoint(x: bounds.midX, y: bounds.midY)
         let titleAttributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 34, weight: .semibold),
             .foregroundColor: NSColor.white
@@ -227,13 +253,14 @@ private final class PairingOverlayView: NSView {
             .foregroundColor: NSColor(calibratedWhite: 0.72, alpha: 1)
         ]
 
-        drawCentered(titleText, atY: center.y + 8, attributes: titleAttributes)
-        drawCentered(detailText, atY: center.y - 34, attributes: detailAttributes)
+        drawCentered(titleText, atY: bounds.height - 70, attributes: titleAttributes)
+        drawCentered(detailText, atY: bounds.height - 112, attributes: detailAttributes)
 
-        let radius: CGFloat = 18
+        guard let target else { return }
+        let radius: CGFloat = 30
         let ring = NSBezierPath(ovalIn: CGRect(
-            x: center.x - radius,
-            y: center.y + 64 - radius,
+            x: bounds.width * target.x - radius,
+            y: bounds.height * (1 - target.y) - radius,
             width: radius * 2,
             height: radius * 2
         ))

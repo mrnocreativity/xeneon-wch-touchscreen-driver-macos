@@ -33,6 +33,7 @@ public final class HIDDeviceMonitor {
     private let touchReportHandler: TouchReportHandler
     private let deviceMatchedHandler: DeviceMatchedHandler
     private let deviceRemovalHandler: DeviceRemovalHandler
+    private let topologyChangeHandler: () -> Void
     private let openOptions: IOOptionBits
 
     private var reportRegistrations: [HIDReportRegistration] = []
@@ -50,13 +51,15 @@ public final class HIDDeviceMonitor {
         seizeDevice: Bool = true,
         touchReportHandler: @escaping TouchReportHandler,
         deviceRemovalHandler: @escaping DeviceRemovalHandler,
-        deviceMatchedHandler: @escaping DeviceMatchedHandler = { _ in }
+        deviceMatchedHandler: @escaping DeviceMatchedHandler = { _ in },
+        topologyChangeHandler: @escaping () -> Void = {}
     ) {
         self.manager = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
         self.eventQueue = eventQueue
         self.touchReportHandler = touchReportHandler
         self.deviceMatchedHandler = deviceMatchedHandler
         self.deviceRemovalHandler = deviceRemovalHandler
+        self.topologyChangeHandler = topologyChangeHandler
         self.openOptions = seizeDevice
             ? IOOptionBits(kIOHIDOptionsTypeSeizeDevice)
             : IOOptionBits(kIOHIDOptionsTypeNone)
@@ -126,6 +129,10 @@ public final class HIDDeviceMonitor {
         let service = IOHIDDeviceGetService(device)
         var registryEntryID: UInt64 = 0
         let registryEntryResult = IORegistryEntryGetRegistryEntryID(service, &registryEntryID)
+        guard registryEntryResult == KERN_SUCCESS, registryEntryID != 0 else {
+            DriverLoggers.log(.error, category: .hid, "Touch interface has no registry identity; input remains disabled.")
+            return
+        }
         let identity = TouchDeviceIdentity(
             locationID: locationNumber.uint32Value,
             serialNumber: deviceProperty(device, key: kIOHIDSerialNumberKey),
@@ -153,6 +160,7 @@ public final class HIDDeviceMonitor {
             "WCH touch mouse interface matched at \(identity.hexadecimalLocationID), registry entry \(identity.hexadecimalRegistryEntryID ?? "unavailable"). Manufacturer: \(self.deviceProperty(device, key: kIOHIDManufacturerKey) ?? "Unknown"), product: \(self.deviceProperty(device, key: kIOHIDProductKey) ?? "Unknown"), max input report size: \(registration.length)"
         )
 
+        topologyChangeHandler()
         eventQueue.async { [deviceMatchedHandler, identity] in
             deviceMatchedHandler(identity)
         }
@@ -166,7 +174,8 @@ public final class HIDDeviceMonitor {
         registration.invalidate()
         retiredRegistrations.append(registration)
 
-        DriverLoggers.log(.notice, category: .hid, "WCH touch interface at \(registration.identity.hexadecimalLocationID) removed; canceling only that device session.")
+        DriverLoggers.log(.notice, category: .hid, "WCH touch interface at \(registration.identity.hexadecimalLocationID) removed; reconciling pairing authority.")
+        topologyChangeHandler()
         eventQueue.async { [deviceRemovalHandler, identity = registration.identity] in
             deviceRemovalHandler(identity)
         }
@@ -192,6 +201,17 @@ public final class HIDDeviceMonitor {
             return
         }
 
+        devices.forEach(handleDeviceMatched)
+    }
+
+    /// Main-thread inventory reconciliation catches missed match/removal notifications.
+    public func reconcileDevices() {
+        guard isStarted else { return }
+        let devices = IOHIDManagerCopyDevices(manager) as? Set<IOHIDDevice> ?? []
+        let removed = reportRegistrations.filter { registration in
+            !devices.contains { registration.matches($0) }
+        }.map(\.device)
+        removed.forEach(handleDeviceRemoved)
         devices.forEach(handleDeviceMatched)
     }
 

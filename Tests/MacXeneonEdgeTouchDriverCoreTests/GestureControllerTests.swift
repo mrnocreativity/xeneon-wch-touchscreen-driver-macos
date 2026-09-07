@@ -1,8 +1,26 @@
 import CoreGraphics
-import MacXeneonEdgeTouchDriverCore
+@testable import MacXeneonEdgeTouchDriverCore
 import XCTest
 
 final class GestureControllerTests: XCTestCase {
+    func testDelayedHoldCannotInjectAfterAuthorityCloses() {
+        let queue = DispatchQueue(label: "test.authority-gated-hold")
+        let input = RecordingInputSink()
+        let cursor = RecordingCursorController()
+        let gate = ObservationGate()
+        let controller = makeController(input: input, cursor: cursor,
+            timing: GestureTiming(warpToClickDelayMs: 0, downToUpDelayMs: 0,
+                                  clickToWarpBackDelayMs: 0, tapDebounceMs: 0, holdToDragMs: 50),
+            schedulingQueue: queue)
+        controller.mayRoute = { gate.allowsRouting }
+        controller.handle(event(.down, rawX: 0, rawY: 0))
+        gate.externalChange()
+        let settled = expectation(description: "revoked hold callback")
+        queue.asyncAfter(deadline: .now() + .milliseconds(100)) { settled.fulfill() }
+        wait(for: [settled], timeout: 1)
+        XCTAssertTrue(input.calls.isEmpty)
+        XCTAssertEqual(controller.state, .idle)
+    }
     func testTouchDownDoesNotBorrowOrMoveCursorBeforeGestureClassification() {
         let input = RecordingInputSink()
         let cursor = RecordingCursorController()

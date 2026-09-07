@@ -54,3 +54,20 @@ observation gaps is required and this limitation must remain documented.
 5. Update usage documentation, build, sign, and install. Trigger canonical recovery
    and hand physical target touches to the user. Publish only to fork main under
    the existing authorization; never update the curated upstream PR branch.
+
+## Implementation verification
+
+- 109 Swift tests pass with warnings treated as errors. Coverage includes
+  two-target contact validation, stale observation generations, heartbeat
+  expiry, queued hold cancellation, restart migration, group revocation,
+  persistence failure, removed-device reports, overlay/topology changes, and
+  command endpoint ownership and round trips.
+- The release build is warning-clean; shell syntax, plist, and whitespace checks
+  pass. The canonical installer deployed a signed binary whose strict signature
+  verification passes, and the LaunchAgent is running.
+- Live `status`, `cancel-pairing`, and `re-pair` commands were acknowledged.
+  Cancellation removed the visible driver window and suspended unresolved input;
+  re-pair returned to calibration with a fresh generation. WindowServer bounds
+  placed the initial prompt on a touch display, not the main monitor.
+- Physical completion on both panels and a subsequent cable/sleep/wake acceptance
+  sequence remain user-dependent and are not claimed by these automated checks.

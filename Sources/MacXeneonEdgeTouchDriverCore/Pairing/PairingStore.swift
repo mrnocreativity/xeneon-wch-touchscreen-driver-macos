@@ -4,7 +4,7 @@ import Foundation
 
 /// Lifetime of a persisted pairing.
 public enum PairingScope: String, Codable, Equatable, Sendable {
-    /// Runtime identifiers are trusted only during the boot in which calibration occurred.
+    /// Legacy encoded name: runtime identifiers require uninterrupted process observation.
     case bootSession
 
     /// Both endpoints exposed public hardware identifiers that were unique when calibrated.
@@ -20,12 +20,15 @@ public struct TouchDisplayPairing: Codable, Equatable, Sendable {
     public let displaySerialNumber: UInt32
     public let bootSessionIdentifier: String
     public let scope: PairingScope
+    public let observationSession: String?
+    public let calibrationRevision: Int?
 
     public init(
         device: TouchDeviceIdentity,
         display: DisplaySnapshot,
         bootSessionIdentifier: String,
-        scope: PairingScope
+        scope: PairingScope,
+        observationSession: String? = nil
     ) {
         self.device = device
         self.displayID = display.displayID
@@ -34,6 +37,8 @@ public struct TouchDisplayPairing: Codable, Equatable, Sendable {
         self.displaySerialNumber = display.serialNumber
         self.bootSessionIdentifier = bootSessionIdentifier
         self.scope = scope
+        self.observationSession = observationSession
+        self.calibrationRevision = 2
     }
 
     var displayHardwareKey: String? {
@@ -43,7 +48,7 @@ public struct TouchDisplayPairing: Codable, Equatable, Sendable {
 }
 
 private struct PairingFile: Codable {
-    var version = 3
+    var version = 4
     var pairings: [TouchDisplayPairing]
 }
 
@@ -58,15 +63,18 @@ public final class PairingStore {
     private let url: URL
     private let fileManager: FileManager
     private let bootSessionIdentifier: String
+    private let observationSession: String
 
     public init(
         url: URL = PairingStore.defaultURL(),
         fileManager: FileManager = .default,
-        bootSessionIdentifier: String = PairingStore.currentBootSessionIdentifier()
+        bootSessionIdentifier: String = PairingStore.currentBootSessionIdentifier(),
+        observationSession: String = UUID().uuidString
     ) {
         self.url = url
         self.fileManager = fileManager
         self.bootSessionIdentifier = bootSessionIdentifier
+        self.observationSession = observationSession
         self.pairings = []
         load()
     }
@@ -109,7 +117,11 @@ public final class PairingStore {
         connectedDevices: Set<TouchDeviceIdentity>,
         displays: [DisplaySnapshot]
     ) -> DisplaySnapshot? {
+        guard connectedDevices.contains(device) else { return nil }
         if let exact = pairings.first(where: {
+            $0.scope == .bootSession &&
+            $0.observationSession == observationSession &&
+            $0.calibrationRevision == 2 &&
             $0.bootSessionIdentifier == bootSessionIdentifier &&
             runtimeDevice($0.device, matches: device)
         }), let display = displays.first(where: {
@@ -180,6 +192,9 @@ public final class PairingStore {
         connectedDevices: Set<TouchDeviceIdentity>,
         displays: [DisplaySnapshot]
     ) throws {
+        guard connectedDevices.contains(device), displays.contains(display) else {
+            throw PairingStoreError.missingEndpoint
+        }
         let deviceKey = device.hardwareKey
         let displayKey = display.hardwareKey
         let hardwareIsUnique = deviceKey != nil &&
@@ -188,30 +203,45 @@ public final class PairingStore {
             displays.filter { $0.hardwareKey == displayKey }.count == 1
         let scope: PairingScope = hardwareIsUnique ? .hardware : .bootSession
 
-        pairings.removeAll { pairing in
+        var updated = pairings
+        updated.removeAll { pairing in
             let sameRuntimeDevice = pairing.bootSessionIdentifier == bootSessionIdentifier &&
                 pairing.device.locationID == device.locationID
             let sameRuntimeDisplay = pairing.bootSessionIdentifier == bootSessionIdentifier &&
                 pairing.displayID == display.displayID
-            let sameHardwareDevice = scope == .hardware && pairing.scope == .hardware &&
+            let sameHardwareDevice = deviceKey != nil && pairing.scope == .hardware &&
                 pairing.device.hardwareKey == deviceKey
-            let sameHardwareDisplay = scope == .hardware && pairing.scope == .hardware &&
+            let sameHardwareDisplay = displayKey != nil && pairing.scope == .hardware &&
                 pairing.displayHardwareKey == displayKey
             return sameRuntimeDevice || sameRuntimeDisplay || sameHardwareDevice || sameHardwareDisplay
         }
 
-        pairings.append(TouchDisplayPairing(
+        updated.append(TouchDisplayPairing(
             device: device,
             display: display,
             bootSessionIdentifier: bootSessionIdentifier,
-            scope: scope
+            scope: scope,
+            observationSession: observationSession
         ))
-        pairings.sort {
+        updated.sort {
             if $0.bootSessionIdentifier != $1.bootSessionIdentifier {
                 return $0.bootSessionIdentifier < $1.bootSessionIdentifier
             }
             return $0.device.locationID < $1.device.locationID
         }
+        try save(updated)
+        pairings = updated
+    }
+
+    /// Revocation is immediate even if persistence fails. Old records cannot regain
+    /// same-process authority while this store is alive.
+    public func invalidateAmbiguous() throws {
+        pairings.removeAll { $0.scope == .bootSession }
+        try save()
+    }
+
+    public func invalidateAll() throws {
+        pairings.removeAll()
         try save()
     }
 
@@ -243,10 +273,7 @@ public final class PairingStore {
               saved.serialNumber == current.serialNumber else {
             return false
         }
-        guard let currentRegistryEntryID = current.registryEntryID else {
-            return true
-        }
-        return saved.registryEntryID == currentRegistryEntryID
+        return saved.registryEntryID == current.registryEntryID
     }
 
     private func runtimeDisplay(
@@ -271,23 +298,31 @@ public final class PairingStore {
                 return
             }
             let decoded = try JSONDecoder().decode(PairingFile.self, from: data)
-            let bootCompatiblePairings = decoded.version >= 3
-                ? decoded.pairings
-                : decoded.pairings.filter { $0.scope == .hardware }
+            guard decoded.version == 4 else {
+                pairings = []
+                DriverLoggers.log(.notice, category: .display, "Saved pairings require the current physical calibration flow.")
+                return
+            }
+            let bootCompatiblePairings = decoded.pairings.filter {
+                $0.calibrationRevision == 2 &&
+                ($0.scope == .hardware || $0.observationSession == observationSession)
+            }
             let retainedPairings = bootCompatiblePairings.filter {
                 $0.scope == .hardware || $0.bootSessionIdentifier == bootSessionIdentifier
             }
-            pairings = retainedPairings
-            if decoded.version < 3 || retainedPairings.count != decoded.pairings.count {
-                do {
-                    try save()
-                } catch {
-                    DriverLoggers.log(
-                        .error,
-                        category: .display,
-                        "Could not prune expired runtime pairings: \(error.localizedDescription)"
-                    )
-                }
+            // Reject every conflicting association, not just the first record.
+            pairings = retainedPairings.filter { candidate in
+                retainedPairings.filter {
+                    $0.device.locationID == candidate.device.locationID ||
+                    $0.displayID == candidate.displayID
+                }.count == 1
+            }
+            if pairings.count != decoded.pairings.count {
+                // Construction precedes command-endpoint ownership. Loading must
+                // stay read-only so a rejected second daemon cannot mutate the
+                // running owner's file. The next canonical save prunes disk data.
+                DriverLoggers.log(.notice, category: .display,
+                                 "Rejected expired or conflicting saved pairing authority.")
             }
         } catch {
             DriverLoggers.log(.error, category: .display, "Could not load pairing file at \(url.path): \(error.localizedDescription)")
@@ -296,12 +331,16 @@ public final class PairingStore {
     }
 
     private func save() throws {
+        try save(pairings)
+    }
+
+    private func save(_ records: [TouchDisplayPairing]) throws {
         let directory = url.deletingLastPathComponent()
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
 
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try encoder.encode(PairingFile(pairings: pairings))
+        let data = try encoder.encode(PairingFile(pairings: records))
         try data.write(to: url, options: .atomic)
     }
 
@@ -312,4 +351,8 @@ public final class PairingStore {
         guard result == 0, size == MemoryLayout<timeval>.size else { return nil }
         return Int64(bootTime.tv_sec)
     }
+}
+
+enum PairingStoreError: Error {
+    case missingEndpoint
 }

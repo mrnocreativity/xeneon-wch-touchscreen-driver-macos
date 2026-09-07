@@ -42,8 +42,8 @@ the user and ask whether to continue before running the installer.
 - Do not uninstall or remove privacy entries unless the user explicitly asks.
 - Preserve unrelated worktree changes.
 
-Input Monitoring, Accessibility, and each **Touch this display** calibration
-touch require the user. Explain the exact step, wait for confirmation, and then
+Input Monitoring, Accessibility, and each **Touch and release the circle** calibration
+sequence require the user. Explain the exact step, wait for confirmation, and then
 continue. Never claim to have completed a physical or System Settings action
 that the user performed.
 
@@ -138,7 +138,9 @@ contents:
 
 The installer preserves an existing config. Existing pairings may remain valid
 when the attached devices expose sufficiently unique public identities; some
-identical panels intentionally require physical pairing again after reboot.
+identical panels intentionally require physical pairing after process restart,
+sleep/wake, reconnect, or an observation gap. Upgrading from an older pairing
+schema requires the current two-target calibration protocol.
 
 ## 2. Decide whether installation is currently useful
 
@@ -246,14 +248,14 @@ truthfully and wait rather than repeatedly changing the installation.
 
 ## 6. Hand physical pairing to the user
 
-When **Touch this display** appears, tell the user to touch that message on the
-physical touchscreen where it is displayed. Repeat once for every pairing
-overlay. Do not click an overlay with computer-use automation or guess display
+When **Touch and release the circle** appears, tell the user to touch and release
+the first circle, then the second circle on that same physical touchscreen.
+Repeat for every prompted display. Do not click an overlay with computer-use automation or guess display
 coordinates; the point of this step is to associate the USB controller that
 reported the physical touch with the display showing the overlay.
 
 Identical panels with duplicate or missing public serials may deliberately ask
-for pairing once after each Mac reboot. This is a safety behavior, not an
+for pairing after process restart, sleep/wake, reconnect, or an observation gap. This is a safety behavior, not an
 installation failure.
 
 ## 7. Verify the installed service
@@ -310,14 +312,28 @@ not tested as an explicit verification gap.
 - No compatible display is detected: use `swift run DisplayInfo` for local
   diagnosis, summarize only non-sensitive matching information, and do not
   change config without approval.
-- Pairing overlay returns after reboot on identical displays: this is expected
+- Pairing overlay returns after restart, sleep/wake, or reconnect on identical displays: this is expected
   when public controller or display identities are ambiguous.
 - Need deeper HID diagnosis: `swift run HIDDump` is non-seizing and separate
   from the production daemon, but use it only when ordinary logs are
   insufficient and avoid publishing raw identifiers.
 
-Do not delete `pairings.json` as a generic repair. Reset it only when the user
-specifically wants to discard display assignments and approves that action.
+Use the installed driver's `status` command for per-controller authority and
+recovery reasons. Redact its controller identifiers and coordinates before
+sharing publicly. For an authorized pairing recovery, use its canonical
+`re-pair` command; `cancel-pairing` hides calibration while keeping unresolved
+input disabled. These commands communicate with the running driver, never edit
+the pairing file externally:
+
+```sh
+"$HOME/Library/Application Support/MacXeneonEdgeTouchDriver/bin/MacXeneonEdgeTouchDriver" status
+"$HOME/Library/Application Support/MacXeneonEdgeTouchDriver/bin/MacXeneonEdgeTouchDriver" re-pair
+"$HOME/Library/Application Support/MacXeneonEdgeTouchDriver/bin/MacXeneonEdgeTouchDriver" cancel-pairing
+```
+
+Do not manually edit or delete `pairings.json` to repair local behavior. Fix the
+driver structurally and use its canonical recovery features. Any necessary
+manual state intervention requires the user's explicit approval first.
 
 ## Uninstall only when explicitly requested
 

@@ -4,7 +4,56 @@ import Foundation
 import XCTest
 
 final class PairingStoreTests: XCTestCase {
-    func testRuntimeAssignmentPersistsAcrossProcessRestartInSameBoot() throws {
+    func testFailedAssignmentDoesNotPublishInMemoryAuthority() throws {
+        let url = temporaryURL()
+        // A directory in place of the data file forces atomic persistence to fail.
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = PairingStore(url: url)
+        let device = TouchDeviceIdentity(locationID: 1)
+        let display = makeDisplay(id: 41, serial: 0)
+        XCTAssertThrowsError(try store.assign(device: device, to: display,
+                                              connectedDevices: [device], displays: [display]))
+        XCTAssertTrue(store.pairings.isEmpty)
+        XCTAssertNil(store.resolveDisplay(for: device, connectedDevices: [device], displays: [display]))
+    }
+
+    func testGroupRevocationPreservesOnlyUniqueHardwareAssociations() throws {
+        let store = PairingStore(url: temporaryURL())
+        let devices: Set = [TouchDeviceIdentity(locationID: 1), TouchDeviceIdentity(locationID: 2),
+                            TouchDeviceIdentity(locationID: 3, serialNumber: "UNIQUE")]
+        let displays = [makeDisplay(id: 41, serial: 0), makeDisplay(id: 42, serial: 0), makeDisplay(id: 43, serial: 99)]
+        for (device, display) in zip(devices.sorted { $0.locationID < $1.locationID }, displays) {
+            try store.assign(device: device, to: display, connectedDevices: devices, displays: displays)
+        }
+        try store.invalidateAmbiguous()
+        XCTAssertEqual(store.pairings.count, 1)
+        XCTAssertEqual(store.pairings.first?.scope, .hardware)
+        try store.invalidateAll()
+        XCTAssertTrue(store.pairings.isEmpty)
+    }
+
+    func testVersionThreeCannotRestoreEvenMatchingHIDRegistryEntry() throws {
+        let url = temporaryURL()
+        let device = TouchDeviceIdentity(locationID: 1, registryEntryID: 101)
+        let display = makeDisplay(id: 41, serial: 0)
+        let store = PairingStore(url: url, observationSession: "SAME")
+        try store.assign(device: device, to: display, connectedDevices: [device], displays: [display])
+        var data = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        data["version"] = 3
+        try JSONSerialization.data(withJSONObject: data).write(to: url)
+        let reloaded = PairingStore(url: url, observationSession: "SAME")
+        XCTAssertTrue(reloaded.pairings.isEmpty)
+    }
+
+    func testMissingEndpointCannotBeAssigned() {
+        let store = PairingStore(url: temporaryURL())
+        XCTAssertThrowsError(try store.assign(device: TouchDeviceIdentity(locationID: 1),
+                                              to: makeDisplay(id: 41, serial: 0), connectedDevices: [], displays: []))
+        XCTAssertTrue(store.pairings.isEmpty)
+    }
+
+    func testAmbiguousAssignmentRequiresCalibrationAfterProcessRestartInSameBoot() throws {
         let url = temporaryURL()
         let device = TouchDeviceIdentity(locationID: 1, registryEntryID: 101)
         let display = makeDisplay(id: 41, serial: 0)
@@ -18,11 +67,8 @@ final class PairingStoreTests: XCTestCase {
         )
         let reloaded = PairingStore(url: url, bootSessionIdentifier: "BOOT-A")
 
-        XCTAssertEqual(
-            reloaded.resolveDisplay(for: device, connectedDevices: [device], displays: [display]),
-            display
-        )
-        XCTAssertEqual(reloaded.pairings.first?.scope, .bootSession)
+        XCTAssertNil(reloaded.resolveDisplay(for: device, connectedDevices: [device], displays: [display]))
+        XCTAssertTrue(reloaded.pairings.isEmpty)
     }
 
     func testSameBootDisplayIDReuseByDifferentHardwareIsRejectedAndPruned() throws {
@@ -185,18 +231,20 @@ final class PairingStoreTests: XCTestCase {
         XCTAssertTrue(reloaded.pairings.isEmpty)
     }
 
-    func testExpiredBootSessionRecordsArePrunedFromPersistence() throws {
+    func testExpiredAuthorityIsRejectedWithoutMutatingSavedEvidenceAtLoad() throws {
         let url = temporaryURL()
         let device = TouchDeviceIdentity(locationID: 1)
         let display = makeDisplay(id: 41, serial: 0)
         let firstBoot = PairingStore(url: url, bootSessionIdentifier: "BOOT-A")
         try firstBoot.assign(device: device, to: display, connectedDevices: [device], displays: [display])
+        let savedData = try Data(contentsOf: url)
 
         let secondBoot = PairingStore(url: url, bootSessionIdentifier: "BOOT-B")
         XCTAssertTrue(secondBoot.pairings.isEmpty)
 
         let oldBootReloaded = PairingStore(url: url, bootSessionIdentifier: "BOOT-A")
         XCTAssertTrue(oldBootReloaded.pairings.isEmpty)
+        XCTAssertEqual(try Data(contentsOf: url), savedData)
     }
 
     func testUniquePublicHardwareIdentitiesRestoreAcrossBootAndRuntimeIDChanges() throws {
@@ -309,10 +357,11 @@ final class PairingStoreTests: XCTestCase {
 
         XCTAssertTrue(store.pairings.isEmpty)
         let persisted = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any]
-        XCTAssertEqual(persisted?["version"] as? Int, 3)
+        // Preserve the old file for diagnosis until canonical calibration/reset saves v4.
+        XCTAssertEqual(persisted?["version"] as? Int, 2)
     }
 
-    func testVersionTwoHardwarePairingIsRetained() throws {
+    func testOldHardwarePairingRequiresNewCalibrationProtocol() throws {
         let url = temporaryURL()
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(),
@@ -329,14 +378,13 @@ final class PairingStoreTests: XCTestCase {
 
         let store = PairingStore(url: url, bootSessionIdentifier: "BOOT-B")
 
-        XCTAssertEqual(store.pairings.count, 1)
-        XCTAssertEqual(
+        XCTAssertTrue(store.pairings.isEmpty)
+        XCTAssertNil(
             store.resolveDisplay(
                 for: currentDevice,
                 connectedDevices: [currentDevice],
                 displays: [currentDisplay]
-            ),
-            currentDisplay
+            )
         )
     }
 

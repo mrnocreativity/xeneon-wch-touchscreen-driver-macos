@@ -62,7 +62,7 @@ Copy and send this prompt to the agent:
 > Open this repository and follow `llm.txt` as the authoritative installation
 > runbook. Install and verify the driver on this Mac. Run the documented
 > read-only checks and installer, then explain and wait for any macOS privacy
-> approvals or physical **Touch this display** steps that I must perform. Do not
+> approvals or physical **Touch and release the circle** steps that I must perform. Do not
 > use sudo, discard existing configuration or pairings, expose hardware
 > identifiers, change unrelated files, commit, push, or alter a pull request.
 
@@ -186,17 +186,33 @@ All fields are optional. Missing or malformed config falls back to defaults and 
 
 ## Pairing Multiple Displays
 
-When a controller has no valid saved assignment, the driver covers one compatible display with **Touch this display**. Touch that physical panel once. The current USB controller endpoint is then paired one-to-one with that current CoreGraphics display in:
+When a controller has no verified assignment, the driver covers one compatible display with **Touch and release the circle**. Touch and release the first circle, then the second circle on that same physical panel. Repeat for the next display. Both contacts must come from the same controller, begin after their target appears, stay near the target, and complete within two seconds. Calibration does not generate mouse clicks. Verified associations are saved atomically in:
 
 ```text
 ~/Library/Application Support/MacXeneonEdgeTouchDriver/pairings.json
 ```
 
-Repeat for each overlay. Pairings survive driver restarts and sleep during the same boot, using the kernel-reported boot time as the session boundary. They survive a Mac restart only when both the touch controller and display report public hardware serials that are unique among the attached devices. Identical controllers with duplicate serials and displays with a zero EDID serial—such as the tested Prechen panels—deliberately request pairing once after each reboot because macOS exposes no supported durable association between their USB and video endpoints.
+Ambiguous associations are trusted only during uninterrupted observation by the current driver process. Identical controllers with duplicate serials and displays with a zero EDID serial—such as the tested Prechen panels—require physical pairing after a driver restart, sleep/wake, reconnect, or observation gap. Associations can restore across those boundaries only when both endpoints expose public hardware identities that remain unique. Upgrading from an older pairing schema requires the new physical calibration flow once, including for hardware-scoped records.
 
-Display position is never used as identity. CoreGraphics and AppKit display-change notifications trigger a debounced refresh of live display bounds, so rearrangement and resolution changes update the global click destination without recalibrating an otherwise valid current-boot pairing. During reconnect, the driver keeps re-enumerating incomplete controller/display sets and requires the complete one-to-one topology to remain unchanged across consecutive observations before calibration begins.
+Display position is never used as identity. CoreGraphics and AppKit notifications suspend routing and cancel queued gesture work before reconciliation. Bounds-only rearrangement and resolution changes preserve verified associations during uninterrupted observation and update their coordinate mapping. Endpoint membership changes revoke ambiguous associations together. During reconnect, the driver re-enumerates incomplete controller/display sets and requires the complete one-to-one topology to remain unchanged across consecutive observations before calibration begins.
 
-When display membership changes, the driver rejects runtime IDs whose current public descriptors no longer match the saved device or display. Ambiguous same-boot pairings are invalidated after the relevant controller or display is removed and require another physical touch. Bounds-only rearrangement keeps the pairing and updates its mapper. The calibration overlay is shown only after fresh CoreGraphics identity and bounds agree with the explicit main and target `NSScreen` records; geometry that is still settling causes a retry before any window becomes visible.
+The overlay is shown only after fresh CoreGraphics identity and bounds agree with the explicit main and target `NSScreen` records. Each calibration contact rechecks visible placement and the full observed topology. Wrong-target or competing contacts, incoherent input, topology changes, and timeouts restart the attempt. A storming controller cannot authorize pairing.
+
+The driver checks live HID/display inventories and AppKit responsiveness once per second. A heartbeat older than four seconds blocks routing immediately and revokes ambiguous authority during recovery. No software can detect a physically indistinguishable endpoint swap that produces no observable notification or inventory change; `re-pair` provides explicit recovery when the physical association is wrong despite apparently unchanged state.
+
+### Driver-owned status and recovery
+
+Run these commands against the installed driver; they do not start a second HID owner:
+
+```sh
+"$HOME/Library/Application Support/MacXeneonEdgeTouchDriver/bin/MacXeneonEdgeTouchDriver" status
+"$HOME/Library/Application Support/MacXeneonEdgeTouchDriver/bin/MacXeneonEdgeTouchDriver" re-pair
+"$HOME/Library/Application Support/MacXeneonEdgeTouchDriver/bin/MacXeneonEdgeTouchDriver" cancel-pairing
+```
+
+`status` returns JSON with each controller's state and reason, active display bounds, observation generation, heartbeat freshness, and calibration target. States are `waitingForHardware`, `needsPairing`, `calibrating`, `active`, and `suspended`; only `active` can route input. Status includes local identifiers, so redact it before sharing publicly.
+
+`re-pair` revokes all assignments and starts the canonical physical flow once topology is ready. `cancel-pairing` hides calibration and keeps unresolved input disabled; already-verified screens continue working. Use `re-pair` to resume. Commands use a user-private local socket and acknowledge within a bounded timeout; an unreachable driver reports an error rather than editing its files.
 
 Gesture behavior:
 
@@ -237,6 +253,6 @@ See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for authorship, license lin
 - If privacy approval disappears after rebuilding, reinstall with the same `CODESIGN_IDENTITY` each time, then approve that signed binary once.
 - If HID open fails, check Input Monitoring permission and confirm no other process has seized the same VID/PID device.
 - If a panel model is not detected, run `swift run DisplayInfo` and adjust the optional display config override.
-- On identical panels without unique public serials, seeing **Touch this display** once after reboot is the intentional safety behavior. The driver will not guess from screen order or position.
-- To deliberately reset display assignments, stop the LaunchAgent, remove only `pairings.json`, and start it again; the pairing overlays will return.
+- On identical panels without unique public serials, calibration after a restart, sleep/wake, reconnect, or observation gap is intentional. The driver will not guess from screen order or position.
+- If touch reaches the wrong panel, use the installed driver's `re-pair` command above, then complete both physical targets on each prompted screen. Do not manually edit or delete saved mappings.
 - For HID investigation, use `swift run HIDDump`; it intentionally runs in non-seize mode and is separate from the production daemon.

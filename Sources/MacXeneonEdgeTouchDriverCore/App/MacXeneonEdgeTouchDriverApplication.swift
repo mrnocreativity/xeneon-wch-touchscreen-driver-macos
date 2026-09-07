@@ -24,7 +24,8 @@ public final class MacXeneonEdgeTouchDriverApplication {
             self?.handleHIDReport(device: device, timestamp: timestamp, event: event)
         },
         deviceRemovalHandler: { [weak self] device in self?.handleDeviceRemoval(device) },
-        deviceMatchedHandler: { [weak self] device in self?.handleDeviceMatched(device) }
+        deviceMatchedHandler: { [weak self] device in self?.handleDeviceMatched(device) },
+        topologyChangeHandler: { [weak self] in self?.observationGate.externalChange() }
     )
 
     private var connectedDevices: Set<TouchDeviceIdentity> = []
@@ -45,6 +46,21 @@ public final class MacXeneonEdgeTouchDriverApplication {
     private var didRegisterDisplayCallback = false
     private var isApplicationEventLoopRunning = false
     private var isRunning = false
+    private var authority: [TouchDeviceIdentity: PairingAuthority] = [:]
+    private var generation: UInt64 = 0
+    private var challenge: PairingChallenge?
+    private var challengeTimeout: DispatchWorkItem?
+    private var configurationPending = false
+    private var configurationStartedAt: UInt64 = 0
+    private var observationLost = false
+    private var sleeping = false
+    private var calibrationPaused = false
+    private var lastObservedDisplays: [DisplaySnapshot]?
+    private var topologyPoll: DispatchSourceTimer?
+    private var heartbeatPending = false
+    private var workspaceObservers: [NSObjectProtocol] = []
+    private let control = DriverControl()
+    private let observationGate = ObservationGate()
 
     public convenience init(configuration: DriverConfiguration = .defaults) {
         self.init(
@@ -102,10 +118,18 @@ public final class MacXeneonEdgeTouchDriverApplication {
         }
 
         registerDisplayReconfigurationCallback()
+        guard didRegisterDisplayCallback else {
+            stop()
+            return EXIT_FAILURE
+        }
         registerScreenParametersObserver()
         installSignalHandlers()
 
         do {
+            try control.start { [weak self] command, reply in
+                guard let self else { reply("{\"error\":\"Driver stopped\"}"); return }
+                self.gestureQueue.async { reply(self.handleControlCommand(command)) }
+            }
             try hidMonitor.start()
         } catch {
             DriverLoggers.log(.fault, category: .lifecycle, "Could not start HID monitor: \(error.localizedDescription)")
@@ -114,6 +138,7 @@ public final class MacXeneonEdgeTouchDriverApplication {
         }
 
         scheduleDisplayReconciliation(reason: "startup", delay: .milliseconds(500))
+        startObservation()
 
         isApplicationEventLoopRunning = true
         NSApp.run()
@@ -123,9 +148,22 @@ public final class MacXeneonEdgeTouchDriverApplication {
 
     public func stop() {
         guard isRunning else { return }
+        isRunning = false
+        observationGate.stop()
         hidMonitor.stop()
-        gestureQueue.sync {
+        control.stop()
+        topologyPoll?.cancel()
+        topologyPoll = nil
+        workspaceObservers.forEach { NSWorkspace.shared.notificationCenter.removeObserver($0) }
+        workspaceObservers.removeAll()
+        unregisterDisplayReconfigurationCallback()
+        unregisterScreenParametersObserver()
+        signalSources.removeAll()
+        // Never synchronously wait for the gesture queue from AppKit: an in-flight
+        // overlay placement may itself be waiting for the main thread.
+        gestureQueue.async { [self] in
             cancelStuckGestureTimer()
+            challengeTimeout?.cancel()
             pairingAdvanceWork?.cancel()
             reconciliationWork?.cancel()
             sessions.values.forEach {
@@ -134,27 +172,29 @@ public final class MacXeneonEdgeTouchDriverApplication {
             }
             sessions.removeAll()
             activeGestureDevice = nil
+            DispatchQueue.main.async { [self] in
+                pairingOverlay.hide()
+                DriverLoggers.log(.notice, category: .lifecycle, "Stopped multi-display touch driver.")
+                stopApplicationEventLoop()
+            }
         }
-        pairingOverlay.hide()
-        unregisterDisplayReconfigurationCallback()
-        unregisterScreenParametersObserver()
-        signalSources.removeAll()
-        isRunning = false
-        DriverLoggers.log(.notice, category: .lifecycle, "Stopped multi-display touch driver.")
-        stopApplicationEventLoop()
     }
 
     func handleDisplayReconfiguration(
         displayID: CGDirectDisplayID,
         flags: CGDisplayChangeSummaryFlags
     ) {
+        observationGate.externalChange()
         gestureQueue.async { [weak self] in
             guard let self else { return }
-            self.cancelPairingPresentation()
+            self.suspendRouting(reason: "Display configuration changing")
 
             if flags.contains(.beginConfigurationFlag) {
+                self.configurationPending = true
+                self.configurationStartedAt = DispatchTime.now().uptimeNanoseconds
                 return
             }
+            self.configurationPending = false
 
             let changesMembership = flags.contains(.addFlag) ||
                 flags.contains(.removeFlag) ||
@@ -162,7 +202,7 @@ public final class MacXeneonEdgeTouchDriverApplication {
                 flags.contains(.disabledFlag)
             if changesMembership {
                 do {
-                    try self.pairingStore.invalidateBootSessionPairing(forDisplayID: displayID)
+                    try self.pairingStore.invalidateAmbiguous()
                 } catch {
                     DriverLoggers.log(
                         .error,
@@ -179,13 +219,23 @@ public final class MacXeneonEdgeTouchDriverApplication {
     }
 
     func handleDeviceMatched(_ device: TouchDeviceIdentity) {
+        if !connectedDevices.contains(device), lastObservedDisplays != nil {
+            suspendRouting(reason: "Controller membership changed")
+            do { try pairingStore.invalidateAmbiguous() }
+            catch { DriverLoggers.log(.error, category: .display, "Could not persist controller revocation: \(error)") }
+        }
+        if let old = connectedDevices.first(where: { $0.locationID == device.locationID && $0 != device }) {
+            handleDeviceRemoval(old)
+        }
         connectedDevices.insert(device)
         ensureSession(for: device)
         scheduleDisplayReconciliation(reason: "HID device match at \(device.hexadecimalLocationID)")
     }
 
     func handleDeviceRemoval(_ device: TouchDeviceIdentity) {
+        suspendRouting(reason: "Controller disconnected")
         connectedDevices.remove(device)
+        authority.removeValue(forKey: device)
         suppressedUntilUp.remove(device)
         sessions[device]?.cancelStormRecoveryTimer()
         if activeGestureDevice == device {
@@ -195,7 +245,7 @@ public final class MacXeneonEdgeTouchDriverApplication {
         }
         sessions.removeValue(forKey: device)
         do {
-            try pairingStore.invalidateBootSessionPairing(for: device)
+            try pairingStore.invalidateAmbiguous()
         } catch {
             DriverLoggers.log(
                 .error,
@@ -215,19 +265,19 @@ public final class MacXeneonEdgeTouchDriverApplication {
             handleTouchEvent(DeviceTouchEvent(device: device, touch: event))
             return
         }
-        if !connectedDevices.contains(device) {
-            connectedDevices.insert(device)
-            ensureSession(for: device)
-        }
+        guard connectedDevices.contains(device) else { return }
         sessions[device]?.validator.recordRawReport(at: timestamp)
     }
 
     func handleTouchEvent(_ event: DeviceTouchEvent) {
-        if !connectedDevices.contains(event.device) {
-            connectedDevices.insert(event.device)
-            ensureSession(for: event.device)
-        }
+        // Late queued reports must never resurrect a removed endpoint.
+        guard connectedDevices.contains(event.device) else { return }
         guard let session = sessions[event.device] else { return }
+        guard !sleeping, !configurationPending else { return }
+        if !observationGate.isFresh {
+            loseObservation(reason: "AppKit heartbeat expired")
+            return
+        }
 
         let validation = session.validator.process(event.touch)
         if let trigger = validation.stormStarted {
@@ -244,6 +294,10 @@ public final class MacXeneonEdgeTouchDriverApplication {
             session.gesture.forceCancel()
             if activeGestureDevice == event.device { activeGestureDevice = nil }
             cancelStuckGestureTimer()
+            if challenge != nil {
+                cancelPairingPresentation()
+                scheduleDisplayReconciliation(reason: "Calibration interrupted by incoherent input")
+            }
         }
 
         for touch in validation.events {
@@ -252,6 +306,8 @@ public final class MacXeneonEdgeTouchDriverApplication {
     }
 
     private func routeValidatedTouchEvent(_ event: DeviceTouchEvent) {
+        guard !configurationPending, !sleeping, !observationLost else { return }
+        if calibrationPaused, authority[event.device]?.phase != .active { return }
         if suppressedUntilUp.contains(event.device) {
             if event.touch.kind == .up {
                 suppressedUntilUp.remove(event.device)
@@ -259,7 +315,8 @@ public final class MacXeneonEdgeTouchDriverApplication {
             return
         }
 
-        if pairingTarget != nil {
+        if pairingTarget != nil, authority[event.device]?.phase != .active {
+            guard sessions[event.device]?.validator.isStormActive == false else { return }
             handlePairingTouch(event)
             return
         }
@@ -272,7 +329,8 @@ public final class MacXeneonEdgeTouchDriverApplication {
             }
         }
 
-        guard let session = sessions[event.device], session.mapperStore.currentMapper != nil else { return }
+        guard authority[event.device]?.phase == .active, observationGate.allowsRouting,
+              let session = sessions[event.device], session.mapperStore.currentMapper != nil else { return }
 
         if let activeGestureDevice, activeGestureDevice != event.device {
             DriverLoggers.log(.debug, category: .gesture, "Ignoring simultaneous contact from \(event.device.hexadecimalLocationID).")
@@ -303,6 +361,10 @@ public final class MacXeneonEdgeTouchDriverApplication {
             doubleClickIntervalProvider: { NSEvent.doubleClickInterval },
             schedulingQueue: gestureQueue
         )
+        gesture.mayRoute = { [weak self] in
+            guard let self else { return false }
+            return self.observationGate.allowsRouting && self.authority[device]?.phase == .active
+        }
         gesture.onBecameIdle = { [weak self] in
             guard let self else { return }
             if self.activeGestureDevice == device { self.activeGestureDevice = nil }
@@ -313,10 +375,23 @@ public final class MacXeneonEdgeTouchDriverApplication {
             gesture: gesture,
             validator: TouchStreamValidator()
         )
+        authority[device] = PairingAuthority(phase: .waitingForHardware, reason: "Awaiting reconciliation", generation: generation)
     }
 
     func refreshDisplayMappings(reason: String) {
+        guard !observationGate.isStopped, !sleeping, !configurationPending, !observationLost else { return }
+        let observationRevision = observationGate.revision
         let activeDisplays = displayResolver.activeDisplays()
+        if let previous = lastObservedDisplays, previous != activeDisplays {
+            suspendRouting(reason: "Observed display topology changed")
+            let oldDescriptors = previous.map { PairingEndpointDescriptor($0) }.sorted { $0.id < $1.id }
+            let newDescriptors = activeDisplays.map { PairingEndpointDescriptor($0) }.sorted { $0.id < $1.id }
+            if oldDescriptors != newDescriptors {
+                do { try pairingStore.invalidateAmbiguous() }
+                catch { DriverLoggers.log(.error, category: .display, "Could not persist topology revocation: \(error)") }
+            }
+        }
+        lastObservedDisplays = activeDisplays
         do {
             let removedCount = try pairingStore.reconcileRuntimeDescriptors(
                 connectedDevices: connectedDevices,
@@ -356,6 +431,20 @@ public final class MacXeneonEdgeTouchDriverApplication {
                 if activeGestureDevice == device { activeGestureDevice = nil }
             }
             sessions[device]?.mapperStore.currentMapper = mapper
+            if display != nil {
+                setAuthority(device, phase: .active, reason: "Verified association and current endpoints")
+            } else if calibrationPaused {
+                setAuthority(device, phase: .suspended, reason: "Calibration cancelled; use re-pair to resume")
+            } else if challenge != nil {
+                setAuthority(device, phase: .calibrating, reason: "Touch and release both visible targets")
+            } else {
+                setAuthority(device, phase: .needsPairing, reason: "No verified association in this observation session")
+            }
+        }
+        guard observationGate.resume(ifRevision: observationRevision) else {
+            suspendRouting(reason: "Endpoint observation changed during reconciliation")
+            scheduleDisplayReconciliation(reason: "Concurrent topology change")
+            return
         }
 
         DriverLoggers.log(
@@ -367,6 +456,8 @@ public final class MacXeneonEdgeTouchDriverApplication {
     }
 
     private func beginPairingIfNeeded(resolvedDisplays: [TouchDeviceIdentity: DisplaySnapshot]? = nil) {
+        guard !calibrationPaused, !sleeping, !configurationPending, !observationLost else { return }
+        if challenge != nil { return }
         let resolved = resolvedDisplays ?? Dictionary(uniqueKeysWithValues: connectedDevices.compactMap { device in
             pairingStore.resolveDisplay(
                 for: device,
@@ -391,6 +482,9 @@ public final class MacXeneonEdgeTouchDriverApplication {
         }
 
         guard unresolved.count == candidates.count, let target = candidates.first else {
+            for device in unresolved {
+                setAuthority(device, phase: .waitingForHardware, reason: "Waiting for complete controller/display topology")
+            }
             pairingTarget = nil
             overlayPresentationAttempt = 0
             resetPairingTopologyStability()
@@ -423,7 +517,7 @@ public final class MacXeneonEdgeTouchDriverApplication {
 
         let total = min(connectedDevices.count, compatibleDisplays.count)
         let step = min(resolved.count + 1, total)
-        guard pairingOverlay.show(on: target, step: step, total: total) else {
+        guard pairingOverlay.showTarget(on: target, step: step, total: total, targetIndex: 0) else {
             pairingTarget = nil
             schedulePairingOverlayRetry()
             return
@@ -431,11 +525,15 @@ public final class MacXeneonEdgeTouchDriverApplication {
 
         overlayPresentationAttempt = 0
         pairingTarget = target
+        challenge = PairingChallenge(readyAt: DispatchTime.now().uptimeNanoseconds, generation: generation)
+        for device in unresolved { setAuthority(device, phase: .calibrating, reason: "Touch and release both visible targets") }
+        armChallengeTimeout()
         DriverLoggers.log(.notice, category: .display, "Waiting for a raw touch on display ID \(target.displayID).")
     }
 
     private func handlePairingTouch(_ event: DeviceTouchEvent) {
-        guard event.touch.kind == .down, let target = pairingTarget else { return }
+        guard let target = pairingTarget, var challenge, challenge.generation == generation else { return }
+        let observationRevision = observationGate.revision
 
         let existingDisplayIsActive = pairingStore.resolveDisplay(
             for: event.device,
@@ -447,6 +545,37 @@ public final class MacXeneonEdgeTouchDriverApplication {
             return
         }
 
+        let currentDisplays = displayResolver.activeDisplays()
+        guard pairingOverlay.isReady(on: target), observationGate.allowsRouting,
+              observationGate.revision == observationRevision,
+              pairingTopologySignature == PairingTopologySignature(
+                devices: connectedDevices, displays: displayResolver.matchingDisplays(from: currentDisplays)),
+              lastObservedDisplays == currentDisplays else {
+            suspendRouting(reason: "Calibration display changed")
+            scheduleDisplayReconciliation(reason: "Calibration placement revalidation")
+            return
+        }
+        let result = challenge.consume(event)
+        self.challenge = challenge
+        switch result {
+        case .waiting: return
+        case .rejected:
+            cancelPairingPresentation()
+            scheduleDisplayReconciliation(reason: "Calibration contact rejected; start again")
+            return
+        case .nextTarget:
+            let step = authority.values.filter { $0.phase == .active }.count + 1
+            guard pairingOverlay.showTarget(on: target, step: step, total: compatibleDisplays.count, targetIndex: 1) else {
+                cancelPairingPresentation()
+                scheduleDisplayReconciliation(reason: "Second calibration target unavailable")
+                return
+            }
+            self.challenge?.readyAt = DispatchTime.now().uptimeNanoseconds
+            armChallengeTimeout()
+            return
+        case .complete: break
+        }
+
         do {
             try pairingStore.assign(
                 device: event.device,
@@ -454,17 +583,31 @@ public final class MacXeneonEdgeTouchDriverApplication {
                 connectedDevices: connectedDevices,
                 displays: compatibleDisplays
             )
-            suppressedUntilUp.insert(event.device)
+            guard observationGate.allowsRouting, observationGate.revision == observationRevision else {
+                try pairingStore.remove(device: event.device)
+                suspendRouting(reason: "Topology changed while saving calibration")
+                scheduleDisplayReconciliation(reason: "Calibration commit interrupted")
+                return
+            }
+            challengeTimeout?.cancel()
+            self.challenge = nil
             pairingTarget = nil
             pairingOverlay.showConfirmation(on: target)
             DriverLoggers.log(.notice, category: .display, "Paired controller \(event.device.hexadecimalLocationID) to display ID \(target.displayID).")
             refreshSessionMapper(for: event.device, display: target)
+            setAuthority(event.device, phase: .active, reason: "Two physical calibration targets verified")
 
             pairingAdvanceWork?.cancel()
-            let work = DispatchWorkItem { [weak self] in self?.beginPairingIfNeeded() }
+            let expectedGeneration = generation
+            let work = DispatchWorkItem { [weak self] in
+                guard let self, self.generation == expectedGeneration else { return }
+                self.beginPairingIfNeeded()
+            }
             pairingAdvanceWork = work
             gestureQueue.asyncAfter(deadline: .now() + .milliseconds(650), execute: work)
         } catch {
+            cancelPairingPresentation()
+            setAuthority(event.device, phase: .suspended, reason: "Calibration could not be persisted")
             DriverLoggers.log(.fault, category: .display, "Could not persist touch pairing: \(error.localizedDescription)")
         }
     }
@@ -566,6 +709,164 @@ public final class MacXeneonEdgeTouchDriverApplication {
         sessions[device]?.stormRecoveryTimer != nil
     }
 
+    private func setAuthority(_ device: TouchDeviceIdentity, phase: PairingPhase, reason: String) {
+        let previous = authority[device]
+        authority[device] = PairingAuthority(phase: phase, reason: reason, generation: generation)
+        if previous?.phase != phase || previous?.reason != reason {
+            DriverLoggers.log(.notice, category: .display,
+                             "Controller \(device.hexadecimalLocationID): \(phase.rawValue), \(reason), generation \(generation).")
+        }
+    }
+
+    private func suspendRouting(reason: String) {
+        observationGate.suspend()
+        generation &+= 1
+        reconciliationWork?.cancel()
+        cancelPairingPresentation()
+        for (device, session) in sessions {
+            session.gesture.forceCancel()
+            session.mapperStore.currentMapper = nil
+            session.validator.reset()
+            session.cancelStormRecoveryTimer()
+            setAuthority(device, phase: .suspended, reason: reason)
+        }
+        activeGestureDevice = nil
+        cancelStuckGestureTimer()
+    }
+
+    func loseObservation(reason: String) {
+        guard !observationLost else { return }
+        observationLost = true
+        suspendRouting(reason: reason)
+        do { try pairingStore.invalidateAmbiguous() }
+        catch { DriverLoggers.log(.error, category: .display, "Could not persist observation revocation: \(error)") }
+    }
+
+    func resumeObservation() {
+        observationGate.acknowledge()
+        observationLost = false
+        configurationPending = false
+        sleeping = false
+        refreshDisplayMappings(reason: "Observation resumed; ambiguous associations require calibration")
+    }
+
+    private func startObservation() {
+        observationGate.start()
+        let center = NSWorkspace.shared.notificationCenter
+        workspaceObservers.append(center.addObserver(forName: NSWorkspace.willSleepNotification,
+                                                     object: nil, queue: .main) { [weak self] _ in
+            self?.observationGate.externalChange()
+            self?.gestureQueue.async { [weak self] in
+                self?.sleeping = true
+                self?.loseObservation(reason: "System sleep interrupts endpoint observation")
+            }
+        })
+        workspaceObservers.append(center.addObserver(forName: NSWorkspace.didWakeNotification,
+                                                     object: nil, queue: .main) { [weak self] _ in
+            self?.gestureQueue.async { [weak self] in
+                self?.loseObservation(reason: "System wake requires fresh endpoint observation")
+                self?.resumeObservation()
+            }
+        })
+        let timer = DispatchSource.makeTimerSource(queue: gestureQueue)
+        timer.schedule(deadline: .now() + .seconds(1), repeating: .seconds(1))
+        timer.setEventHandler { [weak self] in
+            guard let self, !self.sleeping else { return }
+            if !self.observationGate.isFresh {
+                self.loseObservation(reason: "AppKit observation gap")
+            }
+            if self.configurationPending,
+               DispatchTime.now().uptimeNanoseconds - self.configurationStartedAt > 4_000_000_000 {
+                self.loseObservation(reason: "Display transaction completion was not observed")
+            }
+            guard !self.heartbeatPending else { return }
+            self.heartbeatPending = true
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.isRunning else { return }
+                let gap = !self.observationGate.isFresh
+                if gap { self.observationGate.externalChange() }
+                self.observationGate.acknowledge()
+                self.hidMonitor.reconcileDevices()
+                self.gestureQueue.async { [weak self] in
+                    guard let self else { return }
+                    self.heartbeatPending = false
+                    if gap { self.loseObservation(reason: "AppKit observation gap") }
+                    if self.observationLost { self.resumeObservation() }
+                    if !self.configurationPending,
+                       self.lastObservedDisplays != self.displayResolver.activeDisplays() {
+                        self.refreshDisplayMappings(reason: "Periodic topology inventory")
+                    }
+                }
+            }
+        }
+        topologyPoll = timer
+        timer.resume()
+    }
+
+    private func armChallengeTimeout() {
+        challengeTimeout?.cancel()
+        let expectedGeneration = generation
+        let expectedReadyAt = challenge?.readyAt
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.generation == expectedGeneration, self.challenge != nil,
+                  self.challenge?.readyAt == expectedReadyAt else { return }
+            self.cancelPairingPresentation()
+            self.scheduleDisplayReconciliation(reason: "Calibration timed out; release fingers and retry")
+        }
+        challengeTimeout = work
+        gestureQueue.asyncAfter(deadline: .now() + .seconds(15), execute: work)
+    }
+
+    func handleControlCommand(_ command: String) -> String {
+        if !observationGate.isFresh { loseObservation(reason: "AppKit heartbeat expired") }
+        switch command {
+        case "status": break
+        case "re-pair":
+            suspendRouting(reason: "User requested physical re-pairing")
+            do { try pairingStore.invalidateAll() }
+            catch {
+                calibrationPaused = true
+                return json(["error": "Could not persist pairing reset: \(error.localizedDescription)"])
+            }
+            calibrationPaused = false
+            // Reply before presentation work so the command does not wait for AppKit.
+            scheduleDisplayReconciliation(reason: "Canonical re-pair command")
+        case "cancel-pairing":
+            calibrationPaused = true
+            cancelPairingPresentation()
+            for device in connectedDevices where authority[device]?.phase != .active {
+                setAuthority(device, phase: .suspended, reason: "Calibration cancelled; use re-pair to resume")
+            }
+        default: return json(["error": "Unknown command"])
+        }
+        let records: [[String: Any]] = connectedDevices.sorted { $0.locationID < $1.locationID }.map { device in
+            let current = authority[device]
+            let display = pairingStore.resolveDisplay(for: device, connectedDevices: connectedDevices, displays: compatibleDisplays)
+            var record: [String: Any] = [
+                "controller": device.hexadecimalLocationID,
+                "state": current?.phase.rawValue ?? "waitingForHardware",
+                "reason": current?.reason ?? "No observation",
+                "generation": current?.generation ?? generation
+            ]
+            if let display, current?.phase == .active {
+                record["displayID"] = display.displayID
+                record["bounds"] = ["x": display.bounds.minX, "y": display.bounds.minY,
+                                    "width": display.bounds.width, "height": display.bounds.height]
+            }
+            return record
+        }
+        return json(["pid": getpid(), "generation": generation, "controllers": records,
+                     "calibrationPaused": calibrationPaused, "heartbeatFresh": observationGate.isFresh,
+                     "target": pairingTarget?.displayID as Any? ?? NSNull(),
+                     "targetStep": challenge.map { $0.targetIndex + 1 } as Any? ?? NSNull()])
+    }
+
+    private func json(_ object: [String: Any]) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]),
+              let text = String(data: data, encoding: .utf8) else { return "{\"error\":\"Could not encode status\"}" }
+        return text
+    }
+
     private func registerDisplayReconfigurationCallback() {
         guard !didRegisterDisplayCallback else { return }
         let context = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
@@ -590,9 +891,10 @@ public final class MacXeneonEdgeTouchDriverApplication {
             object: nil,
             queue: nil
         ) { [weak self] _ in
+            self?.observationGate.externalChange()
             self?.gestureQueue.async { [weak self] in
                 guard let self else { return }
-                self.cancelPairingPresentation()
+                self.suspendRouting(reason: "AppKit screen parameters changed")
                 self.scheduleDisplayReconciliation(reason: "AppKit screen parameters changed")
             }
         }
@@ -609,11 +911,13 @@ public final class MacXeneonEdgeTouchDriverApplication {
         delay: DispatchTimeInterval = .milliseconds(250)
     ) {
         gestureQueue.async { [weak self] in
-            guard let self else { return }
+            guard let self, !self.observationGate.isStopped else { return }
             self.overlayPresentationAttempt = 0
             self.reconciliationWork?.cancel()
+            let expectedGeneration = self.generation
             let work = DispatchWorkItem { [weak self] in
-                self?.refreshDisplayMappings(reason: reason)
+                guard let self, self.generation == expectedGeneration else { return }
+                self.refreshDisplayMappings(reason: reason)
             }
             self.reconciliationWork = work
             self.gestureQueue.asyncAfter(deadline: .now() + delay, execute: work)
@@ -628,8 +932,10 @@ public final class MacXeneonEdgeTouchDriverApplication {
         overlayPresentationAttempt += 1
         reconciliationWork?.cancel()
         let attempt = overlayPresentationAttempt
+        let expectedGeneration = generation
         let work = DispatchWorkItem { [weak self] in
-            self?.refreshDisplayMappings(reason: "pairing overlay readiness retry \(attempt)")
+            guard let self, self.generation == expectedGeneration else { return }
+            self.refreshDisplayMappings(reason: "pairing overlay readiness retry \(attempt)")
         }
         reconciliationWork = work
         gestureQueue.asyncAfter(deadline: .now() + .milliseconds(500), execute: work)
@@ -641,8 +947,10 @@ public final class MacXeneonEdgeTouchDriverApplication {
             pairingTopologyWaitDescription = description
         }
         reconciliationWork?.cancel()
+        let expectedGeneration = generation
         let work = DispatchWorkItem { [weak self] in
-            self?.refreshDisplayMappings(reason: "pairing topology readiness retry")
+            guard let self, self.generation == expectedGeneration else { return }
+            self.refreshDisplayMappings(reason: "pairing topology readiness retry")
         }
         reconciliationWork = work
         gestureQueue.asyncAfter(deadline: .now() + pairingTopologyRetryDelay, execute: work)
@@ -654,6 +962,12 @@ public final class MacXeneonEdgeTouchDriverApplication {
     }
 
     private func cancelPairingPresentation() {
+        challenge = nil
+        for device in connectedDevices where authority[device]?.phase == .calibrating {
+            setAuthority(device, phase: .needsPairing, reason: "Awaiting a fresh calibration presentation")
+        }
+        challengeTimeout?.cancel()
+        challengeTimeout = nil
         pairingTarget = nil
         resetPairingTopologyStability()
         pairingTopologyWaitDescription = nil
@@ -721,6 +1035,57 @@ public final class MacXeneonEdgeTouchDriverApplication {
         action.sa_flags = 0
         sigemptyset(&action.sa_mask)
         _ = sigaction(signalNumber, &action, nil)
+    }
+}
+
+/// Thread-safe gate shared with AppKit callbacks and delayed gesture work.
+final class ObservationGate {
+    private let lock = NSLock()
+    private var suspended = false
+    private var stopped = false
+    var isStopped: Bool { lock.lock(); defer { lock.unlock() }; return stopped }
+    private var monitoring = false
+    private let now: () -> UInt64
+    private var acknowledgedAt: UInt64
+    init(now: @escaping () -> UInt64 = { DispatchTime.now().uptimeNanoseconds }) {
+        self.now = now
+        acknowledgedAt = now()
+    }
+    private var observationRevision: UInt64 = 0
+    var revision: UInt64 { lock.lock(); defer { lock.unlock() }; return observationRevision }
+    var isFresh: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return !monitoring || now() - acknowledgedAt < 4_000_000_000
+    }
+    var allowsRouting: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return !suspended && (!monitoring || now() - acknowledgedAt < 4_000_000_000)
+    }
+    func start() { lock.lock(); monitoring = true; acknowledgedAt = now(); lock.unlock() }
+    func acknowledge() { lock.lock(); acknowledgedAt = now(); lock.unlock() }
+    func suspend() { lock.lock(); suspended = true; lock.unlock() }
+    func stop() { lock.lock(); stopped = true; suspended = true; observationRevision &+= 1; lock.unlock() }
+    func externalChange() {
+        lock.lock(); suspended = true; observationRevision &+= 1; lock.unlock()
+    }
+    func resume(ifRevision expected: UInt64) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard !stopped, expected == observationRevision else { return false }
+        suspended = false
+        return true
+    }
+}
+
+private struct PairingEndpointDescriptor: Equatable {
+    let id: CGDirectDisplayID
+    let runtimeIdentifier: String
+    let vendor: UInt32
+    let model: UInt32
+    let serial: UInt32
+    init(_ display: DisplaySnapshot) {
+        id = display.displayID; vendor = display.vendorNumber
+        runtimeIdentifier = display.runtimeIdentifier
+        model = display.modelNumber; serial = display.serialNumber
     }
 }
 

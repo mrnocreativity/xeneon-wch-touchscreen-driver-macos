@@ -3,6 +3,9 @@ import Foundation
 
 /// Classifies one raw contact as a tap, direct scroll, or hold-and-drag gesture.
 public final class GestureController {
+    /// Evaluated for immediate and delayed gesture work. Cleanup remains permitted.
+    var mayRoute: () -> Bool = { true }
+    private var workGeneration: UInt64 = 0
     private struct EligibleTap {
         let point: CGPoint
         let timestamp: DispatchTime
@@ -45,6 +48,7 @@ public final class GestureController {
     }
 
     public func handle(_ event: TouchEvent) {
+        guard mayRoute() else { forceCancel(); return }
         guard let mapper = mapperProvider() else {
             DriverLoggers.log(.warning, category: .gesture, "Dropping touch event because no display mapper is available.")
             return
@@ -286,6 +290,7 @@ public final class GestureController {
     }
 
     private func borrowCursor(at point: CGPoint) -> Bool {
+        guard mayRoute() else { forceCancel(); return false }
         guard cursorController.borrow(warpingTo: point) else {
             if eligibleFirstTap != nil {
                 finalizeTapSequenceFocus()
@@ -300,6 +305,7 @@ public final class GestureController {
     }
 
     private func cancelPendingWork() {
+        workGeneration &+= 1
         pendingHold?.cancel()
         pendingMouseUp?.cancel()
         pendingCursorReturn?.cancel()
@@ -312,7 +318,12 @@ public final class GestureController {
 
     @discardableResult
     private func schedule(after milliseconds: Int, action: @escaping () -> Void) -> DispatchWorkItem {
-        let workItem = DispatchWorkItem(block: action)
+        let generation = workGeneration
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self, self.workGeneration == generation else { return }
+            guard self.mayRoute() else { self.forceCancel(); return }
+            action()
+        }
         guard milliseconds > 0 else {
             workItem.perform()
             return workItem

@@ -2,10 +2,14 @@
 
 ## Unreleased
 
+- Adds explicit pairing authority states, observation generations, immediate routing suspension, and cancellation of stale gesture/recovery work.
+- Requires two fresh physical target contacts and verified overlay/topology state before atomically committing calibration; old pairing schemas require recalibration.
+- Limits ambiguous mappings to uninterrupted process observation, with conservative recovery after restart, sleep/wake, membership changes, or responsiveness gaps.
+- Adds driver-owned `status`, `re-pair`, and `cancel-pairing` commands through a user-private local socket, plus periodic endpoint inventory and AppKit heartbeat checks.
 - Waits for a complete, stable one-to-one controller/display topology before showing reconnect calibration and keeps discovering missing video endpoints when macOS omits a useful display callback.
 - Revalidates fresh CoreGraphics identity and bounds against the explicit main and target `NSScreen` records before a pairing window can become visible.
 - Runs the accessory application through AppKit's event loop and wakes it during graceful shutdown so WindowServer responsiveness cannot decay while HID input continues separately.
-- Rejects ambiguous same-boot pairings after USB re-enumeration by binding them to the current HID IORegistry instance, preventing stale left/right mappings from surviving a missed disconnect.
+- Uses the current HID IORegistry instance as reconnect evidence; that identifier alone does not establish continuity of the corresponding video endpoint.
 
 ## 1.1.0 - 2026-09-02
 

@@ -1,5 +1,11 @@
 # HID Instance Pairing Validity Design
 
+**Superseded:** the [pairing authority rework](2026-09-07-pairing-authority-rework-design.md)
+replaces this document's restart-persistence policy. A stable HID registry entry
+cannot prove video-endpoint continuity. Ambiguous mappings now require
+uninterrupted process observation and two-target physical calibration.
+The design below is historical context, not current recovery guidance.
+
 ## Problem
 
 The two attached touch controllers report the same USB serial number, and the
@@ -9,10 +15,12 @@ If the driver misses a disconnect while it is stopped, macOS can re-enumerate a
 different physical controller at the same location. The saved pairing still
 looks valid even though touch is routed to the other display.
 
-The observed failure mapped controller `0x01100000`, which emitted a touch on
-the physical right panel, to display 4 at the left desktop edge. Both saved
-records passed the existing descriptor checks because the duplicated public
-identities cannot distinguish the panels.
+The observed failure routed a touch on the physical right panel to the left
+display. Both saved records passed descriptor checks because their public
+identities were duplicated. Later log review showed the wrong associations
+were created during earlier calibration; this was not proof of a subsequent
+USB re-enumeration. The identity risk above remains real but was not established
+as the cause of that incident.
 
 ## Options
 
@@ -55,7 +63,6 @@ USB location, migration of version 2 boot-session records, and retention of
 safe version 2 hardware records. Existing pairing, topology, gesture, build,
 script, signing, and installed LaunchAgent checks remain required.
 
-For this machine, preserve the manually corrected live association while
-upgrading the saved records to version 3 with the currently observed registry
-entry IDs. Then restart the installed driver and verify two active pairings and
-the absence of a calibration overlay.
+The former manual record-migration procedure is withdrawn. Install the current
+driver and use its canonical physical calibration/re-pair flow; do not seed or
+rewrite saved mappings manually.
