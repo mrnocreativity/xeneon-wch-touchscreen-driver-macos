@@ -43,7 +43,7 @@ public struct TouchDisplayPairing: Codable, Equatable, Sendable {
 }
 
 private struct PairingFile: Codable {
-    var version = 2
+    var version = 3
     var pairings: [TouchDisplayPairing]
 }
 
@@ -239,8 +239,14 @@ public final class PairingStore {
         _ saved: TouchDeviceIdentity,
         matches current: TouchDeviceIdentity
     ) -> Bool {
-        saved.locationID == current.locationID &&
-        saved.serialNumber == current.serialNumber
+        guard saved.locationID == current.locationID,
+              saved.serialNumber == current.serialNumber else {
+            return false
+        }
+        guard let currentRegistryEntryID = current.registryEntryID else {
+            return true
+        }
+        return saved.registryEntryID == currentRegistryEntryID
     }
 
     private func runtimeDisplay(
@@ -265,11 +271,14 @@ public final class PairingStore {
                 return
             }
             let decoded = try JSONDecoder().decode(PairingFile.self, from: data)
-            let retainedPairings = decoded.pairings.filter {
+            let bootCompatiblePairings = decoded.version >= 3
+                ? decoded.pairings
+                : decoded.pairings.filter { $0.scope == .hardware }
+            let retainedPairings = bootCompatiblePairings.filter {
                 $0.scope == .hardware || $0.bootSessionIdentifier == bootSessionIdentifier
             }
             pairings = retainedPairings
-            if retainedPairings.count != decoded.pairings.count {
+            if decoded.version < 3 || retainedPairings.count != decoded.pairings.count {
                 do {
                     try save()
                 } catch {

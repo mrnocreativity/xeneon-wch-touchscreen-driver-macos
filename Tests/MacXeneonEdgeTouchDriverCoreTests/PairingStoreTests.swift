@@ -6,7 +6,7 @@ import XCTest
 final class PairingStoreTests: XCTestCase {
     func testRuntimeAssignmentPersistsAcrossProcessRestartInSameBoot() throws {
         let url = temporaryURL()
-        let device = TouchDeviceIdentity(locationID: 1)
+        let device = TouchDeviceIdentity(locationID: 1, registryEntryID: 101)
         let display = makeDisplay(id: 41, serial: 0)
         let first = PairingStore(url: url, bootSessionIdentifier: "BOOT-A")
 
@@ -77,6 +77,41 @@ final class PairingStoreTests: XCTestCase {
         XCTAssertEqual(
             try store.reconcileRuntimeDescriptors(
                 connectedDevices: [reusedLocation],
+                displays: [display]
+            ),
+            1
+        )
+        XCTAssertTrue(store.pairings.isEmpty)
+    }
+
+    func testSameBootControllerRegistryEntryReuseIsRejectedAndPruned() throws {
+        let store = PairingStore(url: temporaryURL(), bootSessionIdentifier: "BOOT-A")
+        let originalDevice = TouchDeviceIdentity(
+            locationID: 1,
+            serialNumber: "DUPLICATE",
+            registryEntryID: 101
+        )
+        let display = makeDisplay(id: 41, serial: 0)
+        try store.assign(
+            device: originalDevice,
+            to: display,
+            connectedDevices: [originalDevice],
+            displays: [display]
+        )
+        let reenumeratedDevice = TouchDeviceIdentity(
+            locationID: 1,
+            serialNumber: "DUPLICATE",
+            registryEntryID: 202
+        )
+
+        XCTAssertNil(store.resolveDisplay(
+            for: reenumeratedDevice,
+            connectedDevices: [reenumeratedDevice],
+            displays: [display]
+        ))
+        XCTAssertEqual(
+            try store.reconcileRuntimeDescriptors(
+                connectedDevices: [reenumeratedDevice],
                 displays: [display]
             ),
             1
@@ -259,6 +294,50 @@ final class PairingStoreTests: XCTestCase {
         let store = PairingStore(url: url, bootSessionIdentifier: "BOOT-B")
 
         XCTAssertTrue(store.pairings.isEmpty)
+    }
+
+    func testVersionTwoBootSessionPairingsAreDiscarded() throws {
+        let url = temporaryURL()
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let legacy = Data(#"{"version":2,"pairings":[{"device":{"locationID":1,"serialNumber":"DUPLICATE"},"displayID":41,"displayVendorNumber":7745,"displayModelNumber":21579,"displaySerialNumber":0,"bootSessionIdentifier":"BOOT-A","scope":"bootSession"}]}"#.utf8)
+        try legacy.write(to: url, options: .atomic)
+
+        let store = PairingStore(url: url, bootSessionIdentifier: "BOOT-A")
+
+        XCTAssertTrue(store.pairings.isEmpty)
+        let persisted = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any]
+        XCTAssertEqual(persisted?["version"] as? Int, 3)
+    }
+
+    func testVersionTwoHardwarePairingIsRetained() throws {
+        let url = temporaryURL()
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let legacy = Data(#"{"version":2,"pairings":[{"device":{"locationID":1,"serialNumber":"TOUCH-A"},"displayID":41,"displayVendorNumber":3672,"displayModelNumber":60672,"displaySerialNumber":101,"bootSessionIdentifier":"BOOT-A","scope":"hardware"}]}"#.utf8)
+        try legacy.write(to: url, options: .atomic)
+        let currentDevice = TouchDeviceIdentity(
+            locationID: 2,
+            serialNumber: "TOUCH-A",
+            registryEntryID: 202
+        )
+        let currentDisplay = makeDisplay(id: 51, serial: 101)
+
+        let store = PairingStore(url: url, bootSessionIdentifier: "BOOT-B")
+
+        XCTAssertEqual(store.pairings.count, 1)
+        XCTAssertEqual(
+            store.resolveDisplay(
+                for: currentDevice,
+                connectedDevices: [currentDevice],
+                displays: [currentDisplay]
+            ),
+            currentDisplay
+        )
     }
 
     func testBootSessionIdentifierUsesKernelBootTimeAcrossProcessTimes() {

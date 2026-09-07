@@ -123,9 +123,13 @@ public final class HIDDeviceMonitor {
             return
         }
 
+        let service = IOHIDDeviceGetService(device)
+        var registryEntryID: UInt64 = 0
+        let registryEntryResult = IORegistryEntryGetRegistryEntryID(service, &registryEntryID)
         let identity = TouchDeviceIdentity(
             locationID: locationNumber.uint32Value,
-            serialNumber: deviceProperty(device, key: kIOHIDSerialNumberKey)
+            serialNumber: deviceProperty(device, key: kIOHIDSerialNumberKey),
+            registryEntryID: registryEntryResult == KERN_SUCCESS ? registryEntryID : nil
         )
         let registration = HIDReportRegistration(
             device: device,
@@ -146,7 +150,7 @@ public final class HIDDeviceMonitor {
         DriverLoggers.log(
             .notice,
             category: .hid,
-            "WCH touch mouse interface matched at \(identity.hexadecimalLocationID). Manufacturer: \(self.deviceProperty(device, key: kIOHIDManufacturerKey) ?? "Unknown"), product: \(self.deviceProperty(device, key: kIOHIDProductKey) ?? "Unknown"), max input report size: \(registration.length)"
+            "WCH touch mouse interface matched at \(identity.hexadecimalLocationID), registry entry \(identity.hexadecimalRegistryEntryID ?? "unavailable"). Manufacturer: \(self.deviceProperty(device, key: kIOHIDManufacturerKey) ?? "Unknown"), product: \(self.deviceProperty(device, key: kIOHIDProductKey) ?? "Unknown"), max input report size: \(registration.length)"
         )
 
         eventQueue.async { [deviceMatchedHandler, identity] in

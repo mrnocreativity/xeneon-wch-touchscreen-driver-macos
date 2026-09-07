@@ -8,14 +8,26 @@ public struct TouchDeviceIdentity: Hashable, Codable, Sendable {
     /// Public USB serial number, when the controller reports one.
     public let serialNumber: String?
 
-    public init(locationID: UInt32, serialNumber: String? = nil) {
+    /// IORegistry service incarnation. This changes when USB re-enumerates the device.
+    public let registryEntryID: UInt64?
+
+    public init(
+        locationID: UInt32,
+        serialNumber: String? = nil,
+        registryEntryID: UInt64? = nil
+    ) {
         self.locationID = locationID
         let normalizedSerial = serialNumber?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.serialNumber = normalizedSerial?.isEmpty == false ? normalizedSerial : nil
+        self.registryEntryID = registryEntryID
     }
 
     public var hexadecimalLocationID: String {
         String(format: "0x%08X", locationID)
+    }
+
+    public var hexadecimalRegistryEntryID: String? {
+        registryEntryID.map { String(format: "0x%016llX", $0) }
     }
 
     /// Hardware key usable only after the pairing coordinator proves uniqueness.
