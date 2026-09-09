@@ -41,6 +41,10 @@ association only after atomic persistence succeeds.
 
 ## Recovery and observation
 
+The heartbeat-expiry invalidation policy below is historical and superseded by
+[load-safe observation](2026-09-09-load-safe-observation-design.md): scheduling
+delays block routing but do not establish lost endpoint identity.
+
 Expose `status`, `re-pair`, and `cancel-pairing` commands through a user-owned local
 IPC endpoint serviced by the running driver. Status reports per-controller state,
 reason, display bounds, and observation generation. Re-pair revokes authority and

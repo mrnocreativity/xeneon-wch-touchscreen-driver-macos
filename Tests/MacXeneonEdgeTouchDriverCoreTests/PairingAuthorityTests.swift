@@ -3,6 +3,69 @@ import Foundation
 import XCTest
 
 final class PairingAuthorityTests: XCTestCase {
+    func testIndependentReceiptsStayFreshWithoutGestureQueueAcknowledgement() {
+        var now: UInt64 = 1_000_000_000
+        let gate = ObservationGate(now: { now })
+        gate.start()
+        for _ in 0..<30 {
+            now += 1_000_000_000
+            gate.acknowledgeEndpoints()
+            gate.acknowledgeAppKit()
+        }
+        XCTAssertTrue(gate.isFresh)
+        XCTAssertFalse(gate.needsRecovery)
+        XCTAssertTrue(gate.allowsRouting)
+    }
+
+    func testAppKitDelayRequiresRevalidationButDoesNotChangeEndpointRevision() {
+        var now: UInt64 = 1_000_000_000
+        let gate = ObservationGate(now: { now })
+        gate.start()
+        let revision = gate.revision
+        for _ in 0..<10 { now += 1_000_000_000; gate.acknowledgeEndpoints() }
+        XCTAssertTrue(gate.endpointsFresh)
+        XCTAssertFalse(gate.appKitFresh)
+        XCTAssertFalse(gate.allowsRouting)
+        gate.acknowledgeAppKit()
+        XCTAssertTrue(gate.isFresh)
+        XCTAssertFalse(gate.allowsRouting, "Freshness alone must not replay queued gestures")
+        XCTAssertEqual(gate.revision, revision)
+        XCTAssertTrue(gate.resume(ifRevision: revision))
+        XCTAssertTrue(gate.allowsRouting)
+    }
+
+    func testEndpointDelayBlocksEvenWithResponsiveAppKit() {
+        var now: UInt64 = 1_000_000_000
+        let gate = ObservationGate(now: { now })
+        gate.start()
+        now += 5_000_000_000
+        gate.acknowledgeAppKit()
+        XCTAssertFalse(gate.endpointsFresh)
+        XCTAssertFalse(gate.resume(ifRevision: gate.revision))
+        gate.acknowledgeEndpoints()
+        XCTAssertTrue(gate.resume(ifRevision: gate.revision))
+    }
+
+    func testObservationWorkIsCoalescedWhileOtherQueuesAreDelayed() {
+        let gate = ObservationGate()
+        XCTAssertTrue(gate.requestAppKitProbe())
+        XCTAssertTrue(gate.beginInventoryDelivery())
+        for _ in 0..<100 {
+            XCTAssertFalse(gate.requestAppKitProbe())
+            XCTAssertFalse(gate.beginInventoryDelivery())
+        }
+        gate.acknowledgeAppKit()
+        gate.endInventoryDelivery()
+        XCTAssertTrue(gate.requestAppKitProbe())
+        XCTAssertTrue(gate.beginInventoryDelivery())
+        gate.stop()
+        gate.acknowledgeAppKit()
+        gate.endInventoryDelivery()
+        XCTAssertFalse(gate.requestAppKitProbe())
+        XCTAssertFalse(gate.beginInventoryDelivery())
+        XCTAssertFalse(gate.allowsRouting)
+    }
+
     func testHeartbeatExpiryBlocksRoutingWithoutWaitingForQueueCallback() {
         var now: UInt64 = 1_000_000_000
         let gate = ObservationGate(now: { now })

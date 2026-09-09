@@ -34,6 +34,9 @@ public final class HIDDeviceMonitor {
     private let deviceMatchedHandler: DeviceMatchedHandler
     private let deviceRemovalHandler: DeviceRemovalHandler
     private let topologyChangeHandler: () -> Void
+    private let observationHandler: () -> Void
+    private let runLoopWorker = HIDRunLoopWorker()
+    private var inventoryTimer: CFRunLoopTimer?
     private let openOptions: IOOptionBits
 
     private var reportRegistrations: [HIDReportRegistration] = []
@@ -52,7 +55,8 @@ public final class HIDDeviceMonitor {
         touchReportHandler: @escaping TouchReportHandler,
         deviceRemovalHandler: @escaping DeviceRemovalHandler,
         deviceMatchedHandler: @escaping DeviceMatchedHandler = { _ in },
-        topologyChangeHandler: @escaping () -> Void = {}
+        topologyChangeHandler: @escaping () -> Void = {},
+        observationHandler: @escaping () -> Void = {}
     ) {
         self.manager = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
         self.eventQueue = eventQueue
@@ -60,6 +64,7 @@ public final class HIDDeviceMonitor {
         self.deviceMatchedHandler = deviceMatchedHandler
         self.deviceRemovalHandler = deviceRemovalHandler
         self.topologyChangeHandler = topologyChangeHandler
+        self.observationHandler = observationHandler
         self.openOptions = seizeDevice
             ? IOOptionBits(kIOHIDOptionsTypeSeizeDevice)
             : IOOptionBits(kIOHIDOptionsTypeNone)
@@ -69,8 +74,12 @@ public final class HIDDeviceMonitor {
         stop()
     }
 
-    /// Starts monitoring on the main CFRunLoop.
+    /// Starts monitoring on an independent interactive run loop.
     public func start() throws {
+        try runLoopWorker.start { try self.startOnRunLoop() }
+    }
+
+    private func startOnRunLoop() throws {
         guard !isStarted else {
             return
         }
@@ -86,25 +95,38 @@ public final class HIDDeviceMonitor {
         IOHIDManagerSetDeviceMatching(manager, matching as CFDictionary)
         IOHIDManagerRegisterDeviceMatchingCallback(manager, hidDeviceMatchedCallback, context)
         IOHIDManagerRegisterDeviceRemovalCallback(manager, hidDeviceRemovedCallback, context)
-        IOHIDManagerScheduleWithRunLoop(manager, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
+        IOHIDManagerScheduleWithRunLoop(manager, CFRunLoopGetCurrent(), CFRunLoopMode.defaultMode.rawValue)
 
         let openResult = IOHIDManagerOpen(manager, openOptions)
         guard openResult == kIOReturnSuccess else {
-            IOHIDManagerUnscheduleFromRunLoop(manager, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
+            IOHIDManagerUnscheduleFromRunLoop(manager, CFRunLoopGetCurrent(), CFRunLoopMode.defaultMode.rawValue)
             throw HIDDeviceMonitorError.openFailed(openResult)
         }
 
         isStarted = true
         registerCurrentlyMatchedDevices()
+        let timer = CFRunLoopTimerCreateWithHandler(nil, CFAbsoluteTimeGetCurrent() + 1, 1, 0, 0) { [weak self] _ in
+            guard let self, self.isStarted else { return }
+            self.reconcileDevices()
+            self.observationHandler()
+        }
+        inventoryTimer = timer
+        CFRunLoopAddTimer(CFRunLoopGetCurrent(), timer, .defaultMode)
     }
 
     /// Stops monitoring and releases report buffers.
     public func stop() {
+        runLoopWorker.stop { self.stopOnRunLoop() }
+    }
+
+    private func stopOnRunLoop() {
         guard isStarted else {
             return
         }
 
-        IOHIDManagerUnscheduleFromRunLoop(manager, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
+        if let inventoryTimer { CFRunLoopTimerInvalidate(inventoryTimer) }
+        inventoryTimer = nil
+        IOHIDManagerUnscheduleFromRunLoop(manager, CFRunLoopGetCurrent(), CFRunLoopMode.defaultMode.rawValue)
         IOHIDManagerClose(manager, openOptions)
         reportRegistrations.forEach { $0.invalidate() }
         retiredRegistrations.forEach { $0.invalidate() }
@@ -204,8 +226,8 @@ public final class HIDDeviceMonitor {
         devices.forEach(handleDeviceMatched)
     }
 
-    /// Main-thread inventory reconciliation catches missed match/removal notifications.
-    public func reconcileDevices() {
+    /// Ordered inventory reconciliation on the same run loop as HID callbacks.
+    private func reconcileDevices() {
         guard isStarted else { return }
         let devices = IOHIDManagerCopyDevices(manager) as? Set<IOHIDDevice> ?? []
         let removed = reportRegistrations.filter { registration in

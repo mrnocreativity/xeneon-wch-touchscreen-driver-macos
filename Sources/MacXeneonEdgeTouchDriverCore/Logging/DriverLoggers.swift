@@ -93,7 +93,7 @@ public enum DriverLoggers {
             logger.fault("\(message, privacy: .public)")
         }
 
-        DriverFileLog.shared.write(level: level, category: category, message: message)
+        DriverFileLog.shared.enqueue(level: level, category: category, message: message)
     }
 
     private static func logger(for category: DriverLogCategory) -> Logger {
@@ -127,6 +127,17 @@ public final class DriverFileLog {
     private var maxBytes: Int = 0
     private var fileHandle: FileHandle?
     private var minimumLevel: DriverLogLevel = .notice
+    private let asynchronousWrites = BoundedDiagnosticQueue()
+
+    /// Production callers never format timestamps or wait for file I/O.
+    public func enqueue(level: DriverLogLevel, category: DriverLogCategory, message: String) {
+        let date = dateProvider()
+        asynchronousWrites.submit { [self] in
+            write(level: level, category: category, message: message, date: date)
+        }
+    }
+
+    public var droppedMessages: UInt64 { asynchronousWrites.droppedCount }
 
     public convenience init() {
         self.init(
@@ -189,6 +200,10 @@ public final class DriverFileLog {
 
     /// Writes one diagnostics log line if file logging is configured.
     public func write(level: DriverLogLevel, category: DriverLogCategory, message: String) {
+        write(level: level, category: category, message: message, date: dateProvider())
+    }
+
+    private func write(level: DriverLogLevel, category: DriverLogCategory, message: String, date: Date) {
         lock.lock()
         defer { lock.unlock() }
 
@@ -201,7 +216,7 @@ public final class DriverFileLog {
         }
 
         dateFormatter.timeZone = timeZoneProvider()
-        let timestamp = dateFormatter.string(from: dateProvider())
+        let timestamp = dateFormatter.string(from: date)
         let line = "\(timestamp) \(level.rawValue) [\(category.rawValue)] \(message)\n"
         guard let data = line.data(using: .utf8) else {
             return

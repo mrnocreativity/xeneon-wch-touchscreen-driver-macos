@@ -46,3 +46,25 @@ Elapsed scheduling time alone is not evidence that registered callbacks were los
 The brainstorming design was approved in the preceding discussion. The
 writing-plans skill is not available in this session; the sequence above is the
 implementation plan.
+
+## Verification receipt
+
+- 135 tests pass with warnings treated as errors; the release build is
+  warning-clean. Regressions cover repeated UI/endpoint delays, stable untouched
+  prompts, retained pairings, stale inventory revisions, actual disconnect and
+  display-identity changes, held fingers, interrupted calibration, stale raw
+  reports, coalesced observation work, independent run-loop lifecycle, and bounded
+  file logging. Shell syntax, plist lint, and whitespace checks pass.
+- The signed canonical installer restarted the service. Strict signature
+  verification passed, the installed and release build UUIDs match, and launchd
+  reports interactive scheduling. A live sample confirms the dedicated endpoint
+  observation thread, separate from the AppKit main thread.
+- During installation macOS reported endpoint membership/display changes, then
+  both panels became available and the first physical target appeared. These
+  transitions are distinct from heartbeat expiry. Status reports fresh AppKit
+  and endpoint observations with no dropped file-log messages. Both controllers
+  subsequently completed their physical-target flow and became active without
+  any further observation-generation change.
+- No saved mappings, configuration, or LaunchAgent files were changed manually,
+  and no physical touches were simulated. Real heavy-load routing acceptance
+  and physical touch/reconnect verification remain distinct from automated tests.

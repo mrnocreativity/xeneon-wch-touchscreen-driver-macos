@@ -139,7 +139,8 @@ contents:
 The installer preserves an existing config. Existing pairings may remain valid
 when the attached devices expose sufficiently unique public identities; some
 identical panels intentionally require physical pairing after process restart,
-sleep/wake, reconnect, or an observation gap. Upgrading from an older pairing
+sleep/wake, reconnect, or genuine endpoint-observation loss. Scheduling delays
+pause routing without discarding pairings. Upgrading from an older pairing
 schema or calibration revision requires the current single-target protocol.
 
 ## 2. Decide whether installation is currently useful
@@ -255,8 +256,11 @@ coordinates; the point of this step is to associate the USB controller that
 reported the physical touch with the display showing the overlay.
 
 Identical panels with duplicate or missing public serials may deliberately ask
-for pairing after process restart, sleep/wake, reconnect, or an observation gap. This is a safety behavior, not an
-installation failure.
+for pairing after process restart, sleep/wake, reconnect, or genuine loss of
+endpoint observation. This is a safety behavior, not an installation failure.
+UI/queue delays alone must not force new pairing. Check the independent
+`appKitFresh`, `endpointsFresh`, and `responsivenessPaused` status fields when
+investigating load-related pauses; do not repeatedly reset pairings.
 
 ## 7. Verify the installed service
 
