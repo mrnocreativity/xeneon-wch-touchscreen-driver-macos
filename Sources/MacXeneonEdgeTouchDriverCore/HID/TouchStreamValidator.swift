@@ -7,6 +7,7 @@ public final class TouchStreamValidator {
         case repeatedFastSegments = "repeated implausibly fast segments"
         case chaoticProbationPath = "chaotic probation path"
         case overlappingContact = "overlapping contact transition"
+        case outOfRangeCoordinate = "coordinate outside device range"
     }
 
     public struct Configuration: Equatable {
@@ -16,15 +17,6 @@ public final class TouchStreamValidator {
         public var maximumProbationPathSpeed: Double
         public var minimumChaoticPathLength: Double
         public var maximumChaoticNetRatio: Double
-        public var stormAcquisitionWindowNanoseconds: UInt64
-        public var stormMinimumAcquisitionSpanNanoseconds: UInt64
-        public var stormMaximumTrackingGapNanoseconds: UInt64
-        public var stormRequiredSamples: Int
-        public var stormMaximumRecentSamples: Int
-        public var stormBaseNormalizedRadius: Double
-        public var stormMaximumNormalizedSpeed: Double
-        public var stormMaximumNormalizedGate: Double
-        public var stormMinimumPathNetRatio: Double
 
         public static let defaults = Configuration(
             probationNanoseconds: 40_000_000,
@@ -32,16 +24,7 @@ public final class TouchStreamValidator {
             severeNormalizedSpeed: 18,
             maximumProbationPathSpeed: 12,
             minimumChaoticPathLength: 0.20,
-            maximumChaoticNetRatio: 0.45,
-            stormAcquisitionWindowNanoseconds: 120_000_000,
-            stormMinimumAcquisitionSpanNanoseconds: 20_000_000,
-            stormMaximumTrackingGapNanoseconds: 120_000_000,
-            stormRequiredSamples: 4,
-            stormMaximumRecentSamples: 16,
-            stormBaseNormalizedRadius: 0.012,
-            stormMaximumNormalizedSpeed: 7,
-            stormMaximumNormalizedGate: 0.12,
-            stormMinimumPathNetRatio: 0.55
+            maximumChaoticNetRatio: 0.45
         )
 
         public init(
@@ -50,16 +33,7 @@ public final class TouchStreamValidator {
             severeNormalizedSpeed: Double,
             maximumProbationPathSpeed: Double,
             minimumChaoticPathLength: Double,
-            maximumChaoticNetRatio: Double,
-            stormAcquisitionWindowNanoseconds: UInt64,
-            stormMinimumAcquisitionSpanNanoseconds: UInt64,
-            stormMaximumTrackingGapNanoseconds: UInt64,
-            stormRequiredSamples: Int,
-            stormMaximumRecentSamples: Int,
-            stormBaseNormalizedRadius: Double,
-            stormMaximumNormalizedSpeed: Double,
-            stormMaximumNormalizedGate: Double,
-            stormMinimumPathNetRatio: Double
+            maximumChaoticNetRatio: Double
         ) {
             self.probationNanoseconds = probationNanoseconds
             self.fastNormalizedSpeed = fastNormalizedSpeed
@@ -67,15 +41,6 @@ public final class TouchStreamValidator {
             self.maximumProbationPathSpeed = maximumProbationPathSpeed
             self.minimumChaoticPathLength = minimumChaoticPathLength
             self.maximumChaoticNetRatio = maximumChaoticNetRatio
-            self.stormAcquisitionWindowNanoseconds = stormAcquisitionWindowNanoseconds
-            self.stormMinimumAcquisitionSpanNanoseconds = stormMinimumAcquisitionSpanNanoseconds
-            self.stormMaximumTrackingGapNanoseconds = stormMaximumTrackingGapNanoseconds
-            self.stormRequiredSamples = stormRequiredSamples
-            self.stormMaximumRecentSamples = stormMaximumRecentSamples
-            self.stormBaseNormalizedRadius = stormBaseNormalizedRadius
-            self.stormMaximumNormalizedSpeed = stormMaximumNormalizedSpeed
-            self.stormMaximumNormalizedGate = stormMaximumNormalizedGate
-            self.stormMinimumPathNetRatio = stormMinimumPathNetRatio
         }
     }
 
@@ -133,10 +98,6 @@ public final class TouchStreamValidator {
         case accepted(Accepted)
     }
 
-    private struct StormTrack {
-        var lastInlier: TouchEvent
-    }
-
     private struct StormState {
         let startedAtNanoseconds: UInt64
         var lastReportAtNanoseconds: UInt64
@@ -144,8 +105,7 @@ public final class TouchStreamValidator {
         var acceptedSamples = 0
         var droppedSamples = 0
         var recoveredContacts = 0
-        var recentPressedSamples: [TouchEvent] = []
-        var track: StormTrack?
+        var tracker = StormConfidenceTracker()
     }
 
     private enum State {
@@ -155,6 +115,68 @@ public final class TouchStreamValidator {
 
     private let configuration: Configuration
     private var state: State = .normal(.idle)
+    private var probationTracker = StormConfidenceTracker()
+    public private(set) var isRecoveryProbation = false
+    private var cleanRecoveryContacts = 0
+    public private(set) var lastDecision = "normal"
+    private var trace: [DiagnosticSample] = []
+    private var traceCursor = 0
+    private var incidentTrace: [DiagnosticSample]?
+    private var lastDiagnosticAt: UInt64?
+    private var lastProcessedAt: UInt64?
+
+    public struct DiagnosticSample: Codable, Equatable {
+        public let uptimeNanoseconds: UInt64
+        public let kind: String
+        public let x: Int?
+        public let y: Int?
+        public let decision: String
+        public let emitted: Int
+        public let cancelled: Bool
+    }
+
+    public var needsConfidenceTimer: Bool {
+        if case .storm = state { return true }
+        return isRecoveryProbation && probationTracker.hasTrack
+    }
+
+    public var hasConfidenceContact: Bool {
+        if case .storm(let storm) = state { return storm.tracker.hasTrack }
+        return isRecoveryProbation && probationTracker.hasTrack
+    }
+
+    public func allowsHold(at timestamp: DispatchTime = .now()) -> Bool {
+        if case .storm(let storm) = state { return storm.tracker.allowsHold(at: timestamp) }
+        return !isRecoveryProbation || probationTracker.allowsHold(at: timestamp)
+    }
+
+    /// Ordered fixed-size capture, including pre-trigger evidence. Encoding/I/O belongs off input queue.
+    public func diagnosticSamples() -> [DiagnosticSample] {
+        guard trace.count == 256 else { return trace }
+        return Array(trace[traceCursor...]) + Array(trace[..<traceCursor])
+    }
+
+    /// At most one snapshot per 30 seconds per controller, including short burst storms.
+    public func takeDiagnosticCapture(at timestamp: DispatchTime) -> [DiagnosticSample]? {
+        let now = timestamp.uptimeNanoseconds
+        if let lastDiagnosticAt,
+           elapsedNanoseconds(from: lastDiagnosticAt, to: now) < 30_000_000_000 { return nil }
+        lastDiagnosticAt = now
+        let capture = incidentTrace ?? diagnosticSamples()
+        incidentTrace = nil
+        return capture
+    }
+
+    private func recordDiagnostic(_ event: TouchEvent?, at timestamp: DispatchTime, result: Result,
+                                  timer: Bool = false) {
+        let sample = DiagnosticSample(uptimeNanoseconds: timestamp.uptimeNanoseconds,
+            kind: event.map { String(describing: $0.kind) } ?? (timer ? "timer" : "raw_idle"),
+            x: event?.rawX, y: event?.rawY, decision: lastDecision,
+            emitted: result.events.count, cancelled: result.cancelActiveGesture || result.rejectedStream)
+        if trace.count < 256 { trace.append(sample) }
+        else { trace[traceCursor] = sample; traceCursor = (traceCursor + 1) % 256 }
+        if let count = incidentTrace?.count, count < 256 { incidentTrace?.append(sample) }
+    }
 
     public init(configuration: Configuration = .defaults) {
         self.configuration = configuration
@@ -167,24 +189,107 @@ public final class TouchStreamValidator {
 
     public func reset() {
         state = .normal(.idle)
+        probationTracker = StormConfidenceTracker()
+        isRecoveryProbation = false
+        cleanRecoveryContacts = 0
+        lastProcessedAt = nil
     }
 
     /// Records a valid raw HID report that did not create a lifecycle event.
     public func recordRawReport(at timestamp: DispatchTime) {
         noteRawReport(at: timestamp)
+        lastDecision = "raw_idle"
+        recordDiagnostic(nil, at: timestamp, result: Result())
     }
 
     public func process(_ event: TouchEvent) -> Result {
+        let now = event.timestamp.uptimeNanoseconds
+        guard !(isStormActive || isRecoveryProbation) || (lastProcessedAt.map({ now > $0 }) ?? true) else {
+            lastDecision = "unordered_report"
+            let cancelled = cancelConfidenceContact()
+            recordDiagnostic(event, at: event.timestamp, result: cancelled)
+            return cancelled
+        }
+        lastProcessedAt = now
         noteRawReport(at: event.timestamp)
-
-        switch state {
-        case .normal(let normal):
-            return processNormal(event, state: normal)
-        case .storm(var storm):
-            let result = processStorm(event, state: &storm)
-            state = .storm(storm)
+        guard XeneonEdgeDevice.rawXRange.contains(event.rawX), XeneonEdgeDevice.rawYRange.contains(event.rawY) else {
+            let result: Result
+            if isStormActive {
+                lastDecision = "out_of_range"
+                result = cancelConfidenceContact()
+            } else {
+                result = beginStorm(trigger: .outOfRangeCoordinate, at: event, cancelActiveGesture: true)
+            }
+            recordDiagnostic(event, at: event.timestamp, result: result)
             return result
         }
+        let result: Result
+        switch state {
+        case .normal(let normal):
+            if isRecoveryProbation {
+                let output = probationTracker.process(event)
+                lastDecision = output.reason
+                if output.cancel || output.reason == "low_support" || output.reason == "competing_path" {
+                    cleanRecoveryContacts = 0
+                    result = beginStorm(trigger: .chaoticProbationPath, at: event, cancelActiveGesture: true)
+                } else {
+                    result = Result(events: output.events)
+                }
+            } else {
+                lastDecision = "normal_validation"
+                result = processNormal(event, state: normal)
+            }
+        case .storm(var storm):
+            let output = storm.tracker.process(event)
+            lastDecision = output.reason
+            if output.reason == "track_supported" || output.reason == "track_acquired" {
+                storm.acceptedSamples += 1
+            } else if output.reason != "release_pending" {
+                storm.droppedSamples += 1
+            }
+            state = .storm(storm)
+            result = Result(events: output.events, cancelActiveGesture: output.cancel)
+        }
+        recordDiagnostic(event, at: event.timestamp, result: result)
+        return result
+    }
+
+    /// Timer-driven release confirmation and stale-track cancellation, never timeout-to-tap.
+    public func advanceConfidence(at timestamp: DispatchTime) -> Result {
+        let output: StormConfidenceTracker.Output
+        if case .storm(var storm) = state {
+            output = storm.tracker.advance(at: timestamp)
+            if output.completed { storm.recoveredContacts += 1 }
+            state = .storm(storm)
+        } else if isRecoveryProbation {
+            output = probationTracker.advance(at: timestamp)
+            if output.completed {
+                cleanRecoveryContacts = output.clean ? cleanRecoveryContacts + 1 : 0
+                if cleanRecoveryContacts >= 3 {
+                    isRecoveryProbation = false
+                    state = .normal(.idle)
+                }
+            }
+            if output.cancel { cleanRecoveryContacts = 0 }
+        } else { return Result() }
+        lastDecision = output.reason
+        let result = Result(events: output.events, cancelActiveGesture: output.cancel)
+        if output.completed || output.cancel {
+            recordDiagnostic(nil, at: timestamp, result: result, timer: true)
+        }
+        return result
+    }
+
+    /// Revoke in-flight contacts without erasing a controller's noise history.
+    public func cancelConfidenceContact() -> Result {
+        if case .storm(var storm) = state {
+            storm.tracker = StormConfidenceTracker()
+            state = .storm(storm)
+        } else {
+            probationTracker = StormConfidenceTracker()
+            state = .normal(.idle)
+        }
+        return Result(cancelActiveGesture: true)
     }
 
     public func stormSnapshot() -> StormSnapshot? {
@@ -192,7 +297,7 @@ public final class TouchStreamValidator {
         return snapshot(for: storm)
     }
 
-    /// Returns to normal mode only after the complete raw report stream has been quiet.
+    /// Raw silence ends the active incident, but stricter contact probation remains.
     public func recoverIfQuiet(
         at timestamp: DispatchTime,
         quietNanoseconds: UInt64 = 1_000_000_000
@@ -206,15 +311,18 @@ public final class TouchStreamValidator {
         let recovery = StormRecovery(
             snapshot: snapshot(for: storm),
             confirmedAtNanoseconds: now,
-            cancelActiveGesture: storm.track != nil
+            cancelActiveGesture: storm.tracker.hasTrack
         )
         state = .normal(.idle)
+        isRecoveryProbation = true
+        probationTracker = StormConfidenceTracker()
+        cleanRecoveryContacts = 0
         return recovery
     }
 
     private func noteRawReport(at timestamp: DispatchTime) {
         guard case .storm(var storm) = state else { return }
-        storm.lastReportAtNanoseconds = timestamp.uptimeNanoseconds
+        storm.lastReportAtNanoseconds = max(storm.lastReportAtNanoseconds, timestamp.uptimeNanoseconds)
         storm.totalReports += 1
         state = .storm(storm)
     }
@@ -320,6 +428,11 @@ public final class TouchStreamValidator {
         cancelActiveGesture: Bool
     ) -> Result {
         let timestamp = event.timestamp.uptimeNanoseconds
+        lastDecision = "storm_trigger: \(trigger.rawValue)"
+        if incidentTrace == nil { incidentTrace = Array(diagnosticSamples().suffix(64)) }
+        isRecoveryProbation = false
+        probationTracker = StormConfidenceTracker()
+        cleanRecoveryContacts = 0
         state = .storm(StormState(
             startedAtNanoseconds: timestamp,
             lastReportAtNanoseconds: timestamp,
@@ -330,139 +443,6 @@ public final class TouchStreamValidator {
             stormStarted: trigger,
             cancelActiveGesture: cancelActiveGesture
         )
-    }
-
-    private func processStorm(_ event: TouchEvent, state storm: inout StormState) -> Result {
-        if var track = storm.track {
-            if event.kind == .up, trackingStepIsPlausible(from: track.lastInlier, to: event) {
-                storm.acceptedSamples += 1
-                storm.recoveredContacts += 1
-                storm.track = nil
-                storm.recentPressedSamples.removeAll(keepingCapacity: true)
-                return Result(events: [eventAtCoordinates(event, of: track.lastInlier, kind: .up)])
-            }
-
-            if event.kind != .up, trackingStepIsPlausible(from: track.lastInlier, to: event) {
-                let moved = event.rawX != track.lastInlier.rawX || event.rawY != track.lastInlier.rawY
-                track.lastInlier = event
-                storm.track = track
-                storm.acceptedSamples += 1
-                return Result(events: moved ? [eventWithKind(event, .move)] : [])
-            }
-
-            storm.droppedSamples += 1
-            let gap = elapsedNanoseconds(from: track.lastInlier, to: event)
-            guard gap >= configuration.stormMaximumTrackingGapNanoseconds else {
-                return Result()
-            }
-
-            storm.track = nil
-            storm.recentPressedSamples.removeAll(keepingCapacity: true)
-            let acquisition = event.kind == .up ? Result() : considerStormCandidate(event, state: &storm)
-            return Result(events: acquisition.events, cancelActiveGesture: true)
-        }
-
-        guard event.kind != .up else {
-            storm.droppedSamples += 1
-            return Result()
-        }
-        return considerStormCandidate(event, state: &storm)
-    }
-
-    private func considerStormCandidate(_ event: TouchEvent, state storm: inout StormState) -> Result {
-        storm.recentPressedSamples.append(event)
-        trimRecentSamples(state: &storm, now: event.timestamp.uptimeNanoseconds)
-
-        guard let chain = bestPlausibleChain(in: storm.recentPressedSamples),
-              chain.count >= configuration.stormRequiredSamples else {
-            return Result()
-        }
-
-        let span = elapsedNanoseconds(from: chain[0], to: chain[chain.count - 1])
-        guard span >= configuration.stormMinimumAcquisitionSpanNanoseconds,
-              chainIsCoherent(chain) else {
-            return Result()
-        }
-
-        storm.droppedSamples += max(0, storm.recentPressedSamples.count - chain.count)
-        storm.acceptedSamples += chain.count
-        storm.recentPressedSamples.removeAll(keepingCapacity: true)
-        storm.track = StormTrack(lastInlier: chain[chain.count - 1])
-
-        var output: [TouchEvent] = [eventWithKind(chain[0], .down)]
-        var last = chain[0]
-        for sample in chain.dropFirst() {
-            guard sample.rawX != last.rawX || sample.rawY != last.rawY else {
-                last = sample
-                continue
-            }
-            output.append(eventWithKind(sample, .move))
-            last = sample
-        }
-        return Result(events: output)
-    }
-
-    private func trimRecentSamples(state storm: inout StormState, now: UInt64) {
-        let cutoff = now >= configuration.stormAcquisitionWindowNanoseconds
-            ? now - configuration.stormAcquisitionWindowNanoseconds
-            : 0
-        let initialCount = storm.recentPressedSamples.count
-        storm.recentPressedSamples.removeAll {
-            $0.timestamp.uptimeNanoseconds < cutoff
-        }
-        if storm.recentPressedSamples.count > configuration.stormMaximumRecentSamples {
-            storm.recentPressedSamples.removeFirst(
-                storm.recentPressedSamples.count - configuration.stormMaximumRecentSamples
-            )
-        }
-        storm.droppedSamples += initialCount - storm.recentPressedSamples.count
-    }
-
-    private func bestPlausibleChain(in samples: [TouchEvent]) -> [TouchEvent]? {
-        guard !samples.isEmpty else { return nil }
-        var lengths = Array(repeating: 1, count: samples.count)
-        var predecessors = Array(repeating: -1, count: samples.count)
-
-        for end in samples.indices {
-            for start in samples.indices where start < end {
-                guard trackingStepIsPlausible(from: samples[start], to: samples[end]) else { continue }
-                if lengths[start] + 1 > lengths[end] {
-                    lengths[end] = lengths[start] + 1
-                    predecessors[end] = start
-                }
-            }
-        }
-
-        guard let bestEnd = lengths.indices.max(by: { lengths[$0] < lengths[$1] }) else { return nil }
-        var indices: [Int] = []
-        var cursor = bestEnd
-        while cursor >= 0 {
-            indices.append(cursor)
-            cursor = predecessors[cursor]
-        }
-        return indices.reversed().map { samples[$0] }
-    }
-
-    private func chainIsCoherent(_ chain: [TouchEvent]) -> Bool {
-        guard chain.count > 1 else { return false }
-        var pathLength = 0.0
-        for index in 1..<chain.count {
-            pathLength += normalizedDistance(from: chain[index - 1], to: chain[index])
-        }
-        guard pathLength > configuration.stormBaseNormalizedRadius else { return true }
-        let netDistance = normalizedDistance(from: chain[0], to: chain[chain.count - 1])
-        return netDistance / pathLength >= configuration.stormMinimumPathNetRatio
-    }
-
-    private func trackingStepIsPlausible(from start: TouchEvent, to end: TouchEvent) -> Bool {
-        let elapsed = elapsedNanoseconds(from: start, to: end)
-        guard elapsed > 0, elapsed <= configuration.stormMaximumTrackingGapNanoseconds else { return false }
-        let seconds = Double(elapsed) / 1_000_000_000
-        let gate = min(
-            configuration.stormMaximumNormalizedGate,
-            configuration.stormBaseNormalizedRadius + configuration.stormMaximumNormalizedSpeed * seconds
-        )
-        return normalizedDistance(from: start, to: end) <= gate
     }
 
     private func meaningfulMoves(_ moves: [TouchEvent], after initial: TouchEvent) -> [TouchEvent] {
@@ -496,7 +476,7 @@ public final class TouchStreamValidator {
             acceptedSamples: storm.acceptedSamples,
             droppedSamples: storm.droppedSamples,
             recoveredContacts: storm.recoveredContacts,
-            hasAcquiredTrack: storm.track != nil
+            hasAcquiredTrack: storm.tracker.hasTrack
         )
     }
 

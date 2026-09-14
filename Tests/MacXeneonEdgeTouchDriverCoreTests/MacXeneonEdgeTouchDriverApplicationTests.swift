@@ -183,7 +183,7 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
         var config = immediateConfiguration()
         config.timing.stuckGestureTimeoutMs = 100
         let input = ApplicationRecordingInputSink()
-        let app = MacXeneonEdgeTouchDriverApplication(configuration: config,
+        let app = MacXeneonEdgeTouchDriverApplication(automaticallyScheduleConfidence: false, configuration: config,
             displayResolver: DisplayResolver(activeDisplayProvider: { [left, right] }), inputSink: input,
             cursorController: ApplicationRecordingCursorController(), pairingStore: store,
             pairingOverlay: ApplicationRecordingPairingOverlay())
@@ -224,7 +224,7 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
         app.handleStormRecoveryTick(for: device, at: DispatchTime(uptimeNanoseconds: start + 2_000_000_000))
         waitForAsyncWork(milliseconds: 350)
         XCTAssertEqual(try statusRecords(app)[0]["state"] as? String, "calibrating")
-        performCalibration(app, device: device)
+        performCalibration(app, device: device, startAt: start + 2_100_000_000)
         XCTAssertEqual(store.pairings.count, 1)
         XCTAssertTrue(input.calls.isEmpty)
     }
@@ -234,7 +234,7 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
         let device = TouchDeviceIdentity(locationID: 1)
         var inventoryReads = 0
         let overlay = ApplicationRecordingPairingOverlay()
-        let app = MacXeneonEdgeTouchDriverApplication(configuration: immediateConfiguration(),
+        let app = MacXeneonEdgeTouchDriverApplication(automaticallyScheduleConfidence: false, configuration: immediateConfiguration(),
             displayResolver: DisplayResolver(activeDisplayProvider: { inventoryReads += 1; return [target] }),
             inputSink: ApplicationRecordingInputSink(), cursorController: ApplicationRecordingCursorController(),
             pairingStore: pairingStore(), pairingOverlay: overlay, requiredStablePairingTopologyObservations: 2)
@@ -326,7 +326,8 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
             (.down, 8_192, 4_800, 20_000_000), (.move, 200, 9_000, 28_000_000),
             (.move, 8_193, 4_800, 36_000_000), (.move, 15_000, 300, 44_000_000),
             (.move, 8_194, 4_801, 52_000_000), (.move, 8_195, 4_802, 68_000_000),
-            (.up, 8_195, 4_802, 84_000_000)
+            (.move, 8_195, 4_802, 76_000_000), (.move, 8_195, 4_802, 84_000_000),
+            (.up, 8_195, 4_802, 100_000_000)
         ]
         for (kind, x, y, offset) in reports {
             app.handleTouchEvent(deviceEvent(device, kind, rawX: x, rawY: y, timestampNanoseconds: start + offset))
@@ -494,7 +495,7 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
         observationClock: @escaping () -> UInt64 = { DispatchTime.now().uptimeNanoseconds },
         displays: @escaping () -> [DisplaySnapshot]
     ) -> MacXeneonEdgeTouchDriverApplication {
-        MacXeneonEdgeTouchDriverApplication(configuration: immediateConfiguration(),
+        MacXeneonEdgeTouchDriverApplication(automaticallyScheduleConfidence: false, configuration: immediateConfiguration(),
             displayResolver: DisplayResolver(activeDisplayProvider: displays), inputSink: input,
             cursorController: ApplicationRecordingCursorController(), pairingStore: store, pairingOverlay: overlay,
             observationClock: observationClock)
@@ -505,7 +506,7 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
         let right = display(id: 42, runtimeIdentifier: "RIGHT", x: 2_000)
         let resolver = DisplayResolver(activeDisplayProvider: { [left, right] })
         var focusRestorerCount = 0
-        let application = MacXeneonEdgeTouchDriverApplication(
+        let application = MacXeneonEdgeTouchDriverApplication(automaticallyScheduleConfidence: false,
             configuration: immediateConfiguration(),
             displayResolver: resolver,
             inputSink: ApplicationRecordingInputSink(),
@@ -536,7 +537,7 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
         try store.assign(device: second, to: right, connectedDevices: devices, displays: [left, right])
         let input = ApplicationRecordingInputSink()
         let cursor = ApplicationRecordingCursorController()
-        let application = MacXeneonEdgeTouchDriverApplication(
+        let application = MacXeneonEdgeTouchDriverApplication(automaticallyScheduleConfidence: false,
             configuration: immediateConfiguration(),
             displayResolver: resolver,
             inputSink: input,
@@ -572,7 +573,7 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
         try store.assign(device: storming, to: left, connectedDevices: devices, displays: [left, right])
         try store.assign(device: healthy, to: right, connectedDevices: devices, displays: [left, right])
         let input = ApplicationRecordingInputSink()
-        let application = MacXeneonEdgeTouchDriverApplication(
+        let application = MacXeneonEdgeTouchDriverApplication(automaticallyScheduleConfidence: false,
             configuration: immediateConfiguration(),
             displayResolver: resolver,
             inputSink: input,
@@ -636,7 +637,7 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
         let device = TouchDeviceIdentity(locationID: 11)
         try store.assign(device: device, to: target, connectedDevices: [device], displays: [target])
         let input = ApplicationRecordingInputSink()
-        let application = MacXeneonEdgeTouchDriverApplication(
+        let application = MacXeneonEdgeTouchDriverApplication(automaticallyScheduleConfidence: false,
             configuration: immediateConfiguration(),
             displayResolver: resolver,
             inputSink: input,
@@ -656,7 +657,9 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
             (.move, 15_000, 300, 1_044_000_000),
             (.move, 8_020, 4_010, 1_052_000_000),
             (.move, 8_030, 4_015, 1_068_000_000),
-            (.up, 8_032, 4_015, 1_084_000_000)
+            (.move, 8_030, 4_015, 1_076_000_000),
+            (.move, 8_030, 4_015, 1_084_000_000),
+            (.up, 8_032, 4_015, 1_100_000_000)
         ]
         for report in reports {
             application.handleTouchEvent(deviceEvent(
@@ -668,7 +671,9 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
             ))
         }
 
-        XCTAssertEqual(input.calls.count, 2)
+        XCTAssertTrue(input.calls.isEmpty, "Release needs confirmation before synthesis")
+        application.handleStormRecoveryTick(for: device, at: DispatchTime(uptimeNanoseconds: 1_124_000_000))
+        guard input.calls.count == 2 else { return XCTFail("Expected exactly one confirmed click, got \(input.calls)") }
         guard case .mouseDown(let downPoint) = input.calls[0],
               case .mouseUp(let upPoint) = input.calls[1] else {
             return XCTFail("Expected one recovered click")
@@ -686,7 +691,7 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
         let overlay = ApplicationRecordingPairingOverlay()
         let device = TouchDeviceIdentity(locationID: 1)
         let input = ApplicationRecordingInputSink()
-        let application = MacXeneonEdgeTouchDriverApplication(
+        let application = MacXeneonEdgeTouchDriverApplication(automaticallyScheduleConfidence: false,
             configuration: immediateConfiguration(),
             displayResolver: resolver,
             inputSink: input,
@@ -716,7 +721,7 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
         let unpaired = TouchDeviceIdentity(locationID: 2)
         let devices: Set = [paired, unpaired]
         try store.assign(device: paired, to: left, connectedDevices: devices, displays: [left, right])
-        let application = MacXeneonEdgeTouchDriverApplication(
+        let application = MacXeneonEdgeTouchDriverApplication(automaticallyScheduleConfidence: false,
             configuration: immediateConfiguration(),
             displayResolver: resolver,
             inputSink: ApplicationRecordingInputSink(),
@@ -753,7 +758,7 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
             displays: [currentDisplay]
         )
         let input = ApplicationRecordingInputSink()
-        let application = MacXeneonEdgeTouchDriverApplication(
+        let application = MacXeneonEdgeTouchDriverApplication(automaticallyScheduleConfidence: false,
             configuration: immediateConfiguration(),
             displayResolver: resolver,
             inputSink: input,
@@ -785,7 +790,7 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
         let store = pairingStore()
         let device = TouchDeviceIdentity(locationID: 1)
         try store.assign(device: device, to: target, connectedDevices: [device], displays: [target])
-        let application = MacXeneonEdgeTouchDriverApplication(
+        let application = MacXeneonEdgeTouchDriverApplication(automaticallyScheduleConfidence: false,
             configuration: immediateConfiguration(),
             displayResolver: resolver,
             inputSink: ApplicationRecordingInputSink(),
@@ -807,7 +812,7 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
         let overlay = ApplicationRecordingPairingOverlay()
         let device = TouchDeviceIdentity(locationID: 1)
         try store.assign(device: device, to: target, connectedDevices: [device], displays: [target])
-        let application = MacXeneonEdgeTouchDriverApplication(
+        let application = MacXeneonEdgeTouchDriverApplication(automaticallyScheduleConfidence: false,
             configuration: immediateConfiguration(),
             displayResolver: resolver,
             inputSink: ApplicationRecordingInputSink(),
@@ -830,7 +835,7 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
         let store = pairingStore()
         let device = TouchDeviceIdentity(locationID: 1)
         try store.assign(device: device, to: target, connectedDevices: [device], displays: [target])
-        let application = MacXeneonEdgeTouchDriverApplication(
+        let application = MacXeneonEdgeTouchDriverApplication(automaticallyScheduleConfidence: false,
             configuration: immediateConfiguration(),
             displayResolver: resolver,
             inputSink: ApplicationRecordingInputSink(),
@@ -857,7 +862,7 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
         let overlay = ApplicationRecordingPairingOverlay(canShow: false)
         let device = TouchDeviceIdentity(locationID: 1)
         let input = ApplicationRecordingInputSink()
-        let application = MacXeneonEdgeTouchDriverApplication(
+        let application = MacXeneonEdgeTouchDriverApplication(automaticallyScheduleConfidence: false,
             configuration: immediateConfiguration(),
             displayResolver: resolver,
             inputSink: input,
@@ -879,7 +884,7 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
         let right = display(id: 42, runtimeIdentifier: "RIGHT", x: 2_000)
         let resolver = DisplayResolver(activeDisplayProvider: { [left, right] })
         let overlay = ApplicationRecordingPairingOverlay()
-        let application = MacXeneonEdgeTouchDriverApplication(
+        let application = MacXeneonEdgeTouchDriverApplication(automaticallyScheduleConfidence: false,
             configuration: immediateConfiguration(),
             displayResolver: resolver,
             inputSink: ApplicationRecordingInputSink(),
@@ -902,7 +907,7 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
         let left = display(id: 41, runtimeIdentifier: "LEFT", x: 0)
         let resolver = DisplayResolver(activeDisplayProvider: { [left] })
         let overlay = ApplicationRecordingPairingOverlay()
-        let application = MacXeneonEdgeTouchDriverApplication(
+        let application = MacXeneonEdgeTouchDriverApplication(automaticallyScheduleConfidence: false,
             configuration: immediateConfiguration(),
             displayResolver: resolver,
             inputSink: ApplicationRecordingInputSink(),
@@ -928,7 +933,7 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
         var displays = [left]
         let resolver = DisplayResolver(activeDisplayProvider: { displays })
         let overlay = ApplicationRecordingPairingOverlay()
-        let application = MacXeneonEdgeTouchDriverApplication(
+        let application = MacXeneonEdgeTouchDriverApplication(automaticallyScheduleConfidence: false,
             configuration: immediateConfiguration(),
             displayResolver: resolver,
             inputSink: ApplicationRecordingInputSink(),
@@ -953,7 +958,7 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
         let right = display(id: 42, runtimeIdentifier: "RIGHT", x: 2_000)
         let resolver = DisplayResolver(activeDisplayProvider: { [left, right] })
         let overlay = ApplicationRecordingPairingOverlay()
-        let application = MacXeneonEdgeTouchDriverApplication(
+        let application = MacXeneonEdgeTouchDriverApplication(automaticallyScheduleConfidence: false,
             configuration: immediateConfiguration(),
             displayResolver: resolver,
             inputSink: ApplicationRecordingInputSink(),
@@ -978,7 +983,7 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
         var right = display(id: 42, runtimeIdentifier: "RIGHT", x: 2_000)
         let resolver = DisplayResolver(activeDisplayProvider: { [left, right] })
         let overlay = ApplicationRecordingPairingOverlay()
-        let application = MacXeneonEdgeTouchDriverApplication(
+        let application = MacXeneonEdgeTouchDriverApplication(automaticallyScheduleConfidence: false,
             configuration: immediateConfiguration(),
             displayResolver: resolver,
             inputSink: ApplicationRecordingInputSink(),
@@ -1006,7 +1011,7 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
         let store = pairingStore()
         let overlay = ApplicationRecordingPairingOverlay(failuresBeforeSuccess: 2)
         let device = TouchDeviceIdentity(locationID: 1)
-        let application = MacXeneonEdgeTouchDriverApplication(
+        let application = MacXeneonEdgeTouchDriverApplication(automaticallyScheduleConfidence: false,
             configuration: immediateConfiguration(),
             displayResolver: resolver,
             inputSink: ApplicationRecordingInputSink(),
@@ -1026,10 +1031,16 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
         XCTAssertEqual(store.pairings.count, 1)
     }
 
-    private func performCalibration(_ application: MacXeneonEdgeTouchDriverApplication, device: TouchDeviceIdentity) {
-        let start = DispatchTime.now().uptimeNanoseconds + 1_000_000
+    private func performCalibration(_ application: MacXeneonEdgeTouchDriverApplication, device: TouchDeviceIdentity,
+                                    startAt: UInt64? = nil) {
+        let start = startAt ?? DispatchTime.now().uptimeNanoseconds + 1_000_000
         application.handleTouchEvent(deviceEvent(device, .down, rawX: 8_192, rawY: 4_800, timestampNanoseconds: start))
+        for index in 1...8 {
+            application.handleTouchEvent(deviceEvent(device, .move, rawX: 8_192, rawY: 4_800,
+                timestampNanoseconds: start + UInt64(index) * 8_000_000))
+        }
         application.handleTouchEvent(deviceEvent(device, .up, rawX: 8_192, rawY: 4_800, timestampNanoseconds: start + 80_000_000))
+        application.handleStormRecoveryTick(for: device, at: DispatchTime(uptimeNanoseconds: start + 104_000_000))
     }
 
     private func immediateConfiguration() -> DriverConfiguration {

@@ -83,6 +83,7 @@ final class TouchStreamValidatorTests: XCTestCase {
 
         XCTAssertNotNil(recovery)
         XCTAssertFalse(validator.isStormActive)
+        XCTAssertTrue(validator.isRecoveryProbation)
         XCTAssertEqual(recovery?.snapshot.totalReports, 2)
     }
 
@@ -94,7 +95,8 @@ final class TouchStreamValidatorTests: XCTestCase {
         let release = event(.up, x: 8_000, y: 4_000, milliseconds: 1_300)
 
         XCTAssertTrue(validator.process(parserStillPressed).events.isEmpty)
-        XCTAssertEqual(validator.process(release).events.map(\.kind), [.down, .up])
+        XCTAssertTrue(validator.process(release).events.isEmpty)
+        XCTAssertTrue(validator.isRecoveryProbation, "A sparse contact is not proof of controller recovery")
     }
 
     func testImpossibleJumpAfterAcceptedMotionCancelsActiveGestureAndStartsStorm() {
@@ -119,7 +121,9 @@ final class TouchStreamValidatorTests: XCTestCase {
             event(.move, x: 8_010, y: 4_005, milliseconds: 36),
             event(.move, x: 15_000, y: 300, milliseconds: 44),
             event(.move, x: 8_020, y: 4_010, milliseconds: 52),
-            event(.move, x: 8_030, y: 4_015, milliseconds: 68)
+            event(.move, x: 8_030, y: 4_015, milliseconds: 68),
+            event(.move, x: 8_030, y: 4_015, milliseconds: 76),
+            event(.move, x: 8_030, y: 4_015, milliseconds: 84)
         ]
 
         var output: [TouchEvent] = []
@@ -131,8 +135,9 @@ final class TouchStreamValidatorTests: XCTestCase {
         XCTAssertEqual(output.first?.rawX, 8_000)
         XCTAssertEqual(output.last?.rawX, 8_030)
 
-        let release = validator.process(event(.up, x: 8_032, y: 4_015, milliseconds: 84))
-        XCTAssertEqual(release.events.map(\.kind), [.up])
+        let release = validator.process(event(.up, x: 8_032, y: 4_015, milliseconds: 100))
+        XCTAssertTrue(release.events.isEmpty)
+        XCTAssertEqual(validator.advanceConfidence(at: time(milliseconds: 124)).events.map(\.kind), [.up])
         XCTAssertEqual(validator.stormSnapshot()?.recoveredContacts, 1)
     }
 
@@ -145,7 +150,9 @@ final class TouchStreamValidatorTests: XCTestCase {
             event(.move, x: 2_600, y: 2_040, milliseconds: 36),
             event(.move, x: 2_900, y: 2_060, milliseconds: 44),
             event(.move, x: 14_500, y: 400, milliseconds: 48),
-            event(.move, x: 3_200, y: 2_080, milliseconds: 52)
+            event(.move, x: 3_200, y: 2_080, milliseconds: 52),
+            event(.move, x: 3_800, y: 2_120, milliseconds: 68),
+            event(.move, x: 4_400, y: 2_160, milliseconds: 84)
         ]
 
         var output: [TouchEvent] = []
@@ -154,7 +161,7 @@ final class TouchStreamValidatorTests: XCTestCase {
         }
 
         XCTAssertEqual(output.first?.kind, .down)
-        XCTAssertEqual(output.last?.rawX, 3_200)
+        XCTAssertEqual(output.last?.rawX, 4_400)
         XCTAssertFalse(output.contains { $0.rawX > 10_000 })
         XCTAssertGreaterThanOrEqual(validator.stormSnapshot()?.droppedSamples ?? 0, 1)
     }

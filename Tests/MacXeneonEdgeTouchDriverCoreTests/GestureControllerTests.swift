@@ -3,6 +3,72 @@ import CoreGraphics
 import XCTest
 
 final class GestureControllerTests: XCTestCase {
+    func testStormTrackExpiryReleasesAnAlreadyStartedDragExactlyOnce() {
+        let input = RecordingInputSink()
+        let cursor = RecordingCursorController()
+        let controller = makeController(input: input, cursor: cursor,
+            timing: GestureTiming(warpToClickDelayMs: 0, downToUpDelayMs: 0,
+                                  clickToWarpBackDelayMs: 0, tapDebounceMs: 0, holdToDragMs: 0))
+        let validator = TouchStreamValidator()
+        controller.mayBeginHold = { validator.allowsHold(at: DispatchTime(uptimeNanoseconds: 1_084_000_000)) }
+        _ = validator.process(event(.down, rawX: 10410, rawY: 6120, timestampNanoseconds: 1_000_000_000))
+        _ = validator.process(event(.move, rawX: 11264, rawY: 4533, timestampNanoseconds: 1_008_000_000))
+        for index in 0..<9 {
+            validator.process(event(.move, rawX: 8000, rawY: 4000,
+                timestampNanoseconds: 1_020_000_000 + UInt64(index) * 8_000_000)).events.forEach { controller.handle($0) }
+        }
+        XCTAssertEqual(input.calls.count, 1, "Fresh supported hold starts one drag")
+        let expiry = validator.advanceConfidence(at: DispatchTime(uptimeNanoseconds: 1_160_000_000))
+        XCTAssertTrue(expiry.cancelActiveGesture)
+        if expiry.cancelActiveGesture { controller.forceCancel() }
+        controller.forceCancel()
+        XCTAssertEqual(input.mouseClickCounts, [1, 1], "Cancellation releases once, never clicks again")
+        XCTAssertEqual(controller.state, .idle)
+    }
+
+    func testStormDoubleClickRequiresTwoIndependentlyConfirmedReleases() {
+        let input = RecordingInputSink()
+        let cursor = RecordingCursorController()
+        let controller = makeController(input: input, cursor: cursor)
+        let validator = TouchStreamValidator()
+        func feed(_ kind: TouchEvent.Kind, _ x: Int, _ y: Int, _ ms: UInt64) {
+            let result = validator.process(event(kind, rawX: x, rawY: y,
+                timestampNanoseconds: 1_000_000_000 + ms * 1_000_000))
+            if result.cancelActiveGesture || result.rejectedStream { controller.forceCancel() }
+            result.events.forEach { controller.handle($0) }
+        }
+        feed(.down, 10410, 6120, 0)
+        feed(.move, 11264, 4533, 8)
+        for start: UInt64 in [20, 200] {
+            for index in 0..<9 { feed(.move, 8000, 4000, start + UInt64(index) * 8) }
+            feed(.up, 8000, 4000, start + 72)
+            XCTAssertEqual(input.calls.count, start == 20 ? 0 : 2)
+            validator.advanceConfidence(at: DispatchTime(uptimeNanoseconds:
+                1_000_000_000 + (start + 96) * 1_000_000)).events.forEach { controller.handle($0) }
+        }
+        XCTAssertEqual(input.mouseClickCounts, [1, 1, 2, 2])
+        XCTAssertEqual(controller.state, .idle)
+    }
+
+    func testHoldChecksFreshConfidenceAtExecutionAndCancelsWithoutClick() {
+        let queue = DispatchQueue(label: "test.confidence-hold")
+        let input = RecordingInputSink()
+        let cursor = RecordingCursorController()
+        let controller = makeController(input: input, cursor: cursor,
+            timing: GestureTiming(warpToClickDelayMs: 0, downToUpDelayMs: 0,
+                                  clickToWarpBackDelayMs: 0, tapDebounceMs: 0, holdToDragMs: 30),
+            schedulingQueue: queue)
+        controller.mayBeginHold = { false }
+        queue.sync { controller.handle(event(.down, rawX: 8000, rawY: 4000)) }
+        let settled = expectation(description: "confidence-gated hold")
+        queue.asyncAfter(deadline: .now() + .milliseconds(80)) {
+            XCTAssertTrue(input.calls.isEmpty)
+            XCTAssertEqual(controller.state, .idle)
+            settled.fulfill()
+        }
+        wait(for: [settled], timeout: 1)
+    }
+
     func testDelayedHoldCannotInjectAfterAuthorityCloses() {
         let queue = DispatchQueue(label: "test.authority-gated-hold")
         let input = RecordingInputSink()

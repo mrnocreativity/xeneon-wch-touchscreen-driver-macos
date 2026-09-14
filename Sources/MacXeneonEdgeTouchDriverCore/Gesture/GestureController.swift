@@ -5,6 +5,8 @@ import Foundation
 public final class GestureController {
     /// Evaluated for immediate and delayed gesture work. Cleanup remains permitted.
     var mayRoute: () -> Bool = { true }
+    /// Storm contacts must still have fresh supporting reports when the hold fires.
+    var mayBeginHold: () -> Bool = { true }
     private var workGeneration: UInt64 = 0
     private struct EligibleTap {
         let point: CGPoint
@@ -236,6 +238,7 @@ public final class GestureController {
                   context.contactID == contactID,
                   context.phase == .pending else { return }
             self.pendingHold = nil
+            guard self.mayBeginHold() else { self.forceCancel(); return }
             guard self.borrowCursor(at: context.startPoint) else { return }
             context.phase = .dragging
             context.clickCount = 1
