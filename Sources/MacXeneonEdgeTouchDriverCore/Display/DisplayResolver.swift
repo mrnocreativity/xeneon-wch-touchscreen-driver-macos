@@ -55,7 +55,7 @@ public struct DisplaySnapshot: Equatable {
     }
 }
 
-/// Resolves and tracks the Xeneon Edge display by EDID and physical size.
+/// Resolves and tracks supported displays by EDID and optional resolution.
 public final class DisplayResolver {
     /// Callback fired after `refresh()` changes the resolved display.
     public var onDisplayChanged: ((CGRect?) -> Void)?
@@ -121,12 +121,26 @@ public final class DisplayResolver {
 
     /// Returns all compatible displays from supplied snapshots.
     public func matchingDisplays(from displays: [DisplaySnapshot]) -> [DisplaySnapshot] {
-        var matches = configuredMatches(from: displays)
+        let matches: [DisplaySnapshot]
         // Older installers wrote the default Corsair values to config.json.
         // Treat those values as defaults so existing installs gain built-in profiles too.
         if configuration == DriverConfiguration.defaults.display {
-            // Prechen HD-123 panels report this EDID identity across display modes.
-            matches += displays.filter { $0.vendorNumber == 7745 && $0.modelNumber == 21579 }
+            matches = SupportedDisplayCatalog.entries.flatMap { entry in
+                Self.matches(
+                    from: displays,
+                    vendorNumber: entry.vendorNumber,
+                    modelNumber: entry.modelNumber,
+                    preferredResolution: entry.preferredResolution
+                )
+            }
+        } else {
+            matches = Self.matches(
+                from: displays,
+                vendorNumber: configuration.vendorNumber,
+                modelNumber: configuration.modelNumber,
+                serialNumber: configuration.serialNumber,
+                preferredResolution: (configuration.expectedWidth, configuration.expectedHeight)
+            )
         }
 
         return matches.sorted { lhs, rhs in
@@ -137,27 +151,34 @@ public final class DisplayResolver {
         }
     }
 
-    private func configuredMatches(from displays: [DisplaySnapshot]) -> [DisplaySnapshot] {
+    private static func matches(
+        from displays: [DisplaySnapshot],
+        vendorNumber: UInt32?,
+        modelNumber: UInt32?,
+        serialNumber: UInt32? = nil,
+        preferredResolution: (width: Int, height: Int)?
+    ) -> [DisplaySnapshot] {
         let vendorModelMatches = displays.filter { display in
-            display.vendorNumber == configuration.vendorNumber &&
-            display.modelNumber == configuration.modelNumber
+            display.vendorNumber == vendorNumber && display.modelNumber == modelNumber
         }
 
         let serialMatches: [DisplaySnapshot]
-        if let serialNumber = configuration.serialNumber {
+        if let serialNumber {
             serialMatches = vendorModelMatches.filter { $0.serialNumber == serialNumber }
         } else {
             serialMatches = vendorModelMatches
         }
 
-        let sizeMatches = serialMatches.filter { display in
-            display.pixelsWide == configuration.expectedWidth &&
-            display.pixelsHigh == configuration.expectedHeight
+        if let preferredResolution {
+            let sizeMatches = serialMatches.filter { display in
+                display.pixelsWide == preferredResolution.width && display.pixelsHigh == preferredResolution.height
+            }
+            if !sizeMatches.isEmpty {
+                return sizeMatches
+            }
         }
 
-        return sizeMatches.isEmpty
-            ? (serialMatches.isEmpty ? vendorModelMatches : serialMatches)
-            : sizeMatches
+        return serialMatches.isEmpty ? vendorModelMatches : serialMatches
     }
 
     /// Returns live snapshots for every active CoreGraphics display.
