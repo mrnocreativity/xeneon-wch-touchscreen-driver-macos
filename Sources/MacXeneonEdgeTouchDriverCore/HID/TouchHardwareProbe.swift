@@ -1,7 +1,8 @@
 import Foundation
+import IOKit
 import IOKit.hid
 
-/// Reads the HID descriptor without opening or seizing the touch interface.
+/// Checks the HID report metadata without accessing live input.
 public enum TouchHardwareProbe: Int32 {
     case supported = 0
     case noController = 3
@@ -23,28 +24,46 @@ public enum TouchHardwareProbe: Int32 {
     }
 
     private static func hasSupportedDescriptor(_ device: IOHIDDevice) -> Bool {
-        guard let size = IOHIDDeviceGetProperty(device, kIOHIDMaxInputReportSizeKey as CFString) as? Int,
+        // Reading a single registry property omits the child elements of
+        // collections. Read the complete property table for the element tree.
+        var table: Unmanaged<CFMutableDictionary>?
+        let result = IORegistryEntryCreateCFProperties(IOHIDDeviceGetService(device), &table, kCFAllocatorDefault, 0)
+        guard result == KERN_SUCCESS, let properties = table?.takeRetainedValue() as? [String: Any],
+              let size = properties[kIOHIDMaxInputReportSizeKey] as? Int,
               size >= XeneonEdgeDevice.touchReportLength,
-              let elements = IOHIDDeviceCopyMatchingElements(device, nil, 0) as? [IOHIDElement] else { return false }
-        let report = elements.filter {
-            Int(IOHIDElementGetReportID($0)) == XeneonEdgeDevice.touchReportID &&
-                !IOHIDElementIsRelative($0) && IOHIDElementGetLogicalMin($0) == 0
+              let elements = properties[kIOHIDElementKey] as? [[String: Any]] else { return false }
+        return hasSupportedElements(elements)
+    }
+
+    // CopyMatchingElements opens a protected HID user client. The registry
+    // contains the descriptor's element tree even before Input Monitoring.
+    static func hasSupportedElements(_ elements: [[String: Any]]) -> Bool {
+        let report = flatten(elements).filter {
+            $0[kIOHIDElementReportIDKey] as? Int == XeneonEdgeDevice.touchReportID &&
+                $0[kIOHIDElementIsRelativeKey] as? Bool == false && $0[kIOHIDElementMinKey] as? Int == 0
         }
         let axes = report.filter {
-            IOHIDElementGetType($0) == kIOHIDElementTypeInput_Misc &&
-                IOHIDElementGetUsagePage($0) == kHIDPage_GenericDesktop && IOHIDElementGetReportSize($0) == 16
+            $0[kIOHIDElementTypeKey] as? Int == Int(kIOHIDElementTypeInput_Misc.rawValue) &&
+                $0[kIOHIDElementUsagePageKey] as? Int == kHIDPage_GenericDesktop &&
+                $0[kIOHIDElementReportSizeKey] as? Int == 16
         }
         let hasContact = report.contains {
-            IOHIDElementGetType($0) == kIOHIDElementTypeInput_Button &&
-                IOHIDElementGetUsagePage($0) == kHIDPage_Button && IOHIDElementGetUsage($0) == 1 &&
-                IOHIDElementGetReportSize($0) == 1 && IOHIDElementGetLogicalMax($0) == 1
+            $0[kIOHIDElementTypeKey] as? Int == Int(kIOHIDElementTypeInput_Button.rawValue) &&
+                $0[kIOHIDElementUsagePageKey] as? Int == kHIDPage_Button && $0[kIOHIDElementUsageKey] as? Int == 1 &&
+                $0[kIOHIDElementReportSizeKey] as? Int == 1 && $0[kIOHIDElementMaxKey] as? Int == 1
         }
         return hasContact && axes.contains {
-            IOHIDElementGetUsage($0) == kHIDUsage_GD_X &&
-                IOHIDElementGetLogicalMax($0) == XeneonEdgeDevice.rawXRange.upperBound
+            $0[kIOHIDElementUsageKey] as? Int == kHIDUsage_GD_X &&
+                $0[kIOHIDElementMaxKey] as? Int == XeneonEdgeDevice.rawXRange.upperBound
         } && axes.contains {
-            IOHIDElementGetUsage($0) == kHIDUsage_GD_Y &&
-                IOHIDElementGetLogicalMax($0) == XeneonEdgeDevice.rawYRange.upperBound
+            $0[kIOHIDElementUsageKey] as? Int == kHIDUsage_GD_Y &&
+                $0[kIOHIDElementMaxKey] as? Int == XeneonEdgeDevice.rawYRange.upperBound
+        }
+    }
+
+    private static func flatten(_ elements: [[String: Any]]) -> [[String: Any]] {
+        elements.flatMap { element in
+            [element] + flatten(element[kIOHIDElementKey] as? [[String: Any]] ?? [])
         }
     }
 }
