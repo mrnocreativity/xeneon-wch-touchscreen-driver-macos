@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 1.3.0 - 2026-11-08
+
+- Checks the connected USB touch controller before installing and offers a choice when compatibility cannot be verified.
+- Guides users through identifying unlisted touchscreens with a mouse or trackpad and verifying each one with a physical tap. Keeps built-in matching for the Corsair Xeneon Edge and Prechen HD-123 (`12.3FHD`).
+- Remembers successfully paired unlisted display models and offers an optional compatibility report once per model, with a preview and steps for submitting it on GitHub.
+- Shows the installer’s completion screen after touch setup succeeds. Guides users to the missing macOS privacy permissions when needed.
+- Waits for launchd to remove the previous job before installing a replacement and handles rollback if the replacement job has already disappeared.
+
 ## 1.2.0
 
 - Adds a universal portable installer for Apple Silicon and Intel Macs. It installs the driver without Xcode or Swift and preserves existing settings and saved pairings during upgrades. The installer is based on Alexander White's [original portable installer](https://github.com/ajvwhite/MacXeneonEdgeTouchDriver/pull/21).
