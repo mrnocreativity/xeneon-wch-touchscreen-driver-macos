@@ -19,6 +19,7 @@ xcuserdata/
 *.log
 *.trace
 *.env
+/.env.release.local
 *.local.json
 artifacts/
 hid-captures/
