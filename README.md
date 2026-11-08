@@ -22,12 +22,13 @@ The driver pairs each physical controller with the display the user actually tou
 
 ## Known Compatibility
 
-Last updated: **September 2, 2026**. This table distinguishes physically verified hardware from the original reference target and unverified controller matches.
+Last updated November 8, 2026. The table includes physically verified hardware, the original reference display, community reports, and compatibility candidates.
 
 | Display or retail name | Known details | Compatibility evidence |
 | --- | --- | --- |
 | [Prechen HD-123 12.3-inch Portable Touch Screen Secondary Monitor](https://www.amazon.de/-/en/dp/B0CTMNPBX3), Amazon ASIN `B0CTMNPBX3` | 1920x720 IPS stretched-bar display sold for AIDA64 CPU/GPU/RAM monitoring; USB-C and HDMI; reports `wch.cn TouchScreen` USB `27C0:0859` | Physically verified on September 2, 2026 with two identical panels connected to one Mac. Pairing, tapping, scrolling, hold-drag, double-clicking, reconnect handling, and per-controller storm containment were exercised. |
 | [CORSAIR XENEON EDGE 14.5-inch LCD Touchscreen](https://www.corsair.com/us/en/p/monitors/cc-9011306-ww/xeneon-edge-14-5-lcd-touchscreen-cc-9011306-ww) | 2560x720 display; `wch.cn TouchScreen` USB `27C0:0859` | Original reference display and supported controller/display target inherited from the upstream project. This fork's expanded two-panel behavior was physically verified on the Prechen hardware above. |
+| [Logicom Nomad Touch 15.6-inch Portable Touch Screen](https://www.logicom-europe.com/fr/ecrans-portables/941-nomad-touch.html) | 1920x1080 IPS touchscreen with USB-C and mini HDMI. Touch controller USB ID is unconfirmed. | Community-reported working in [issue #1](https://github.com/mrnocreativity/xeneon-wch-touchscreen-driver-macos/issues/1). |
 | Other displays reporting `wch.cn TouchScreen` USB `27C0:0859` | Often marketed as portable touchscreens, secondary monitors, stretched-bar displays, sensor panels, or AIDA64 monitors | Compatibility candidate. A matching controller ID is a strong signal, but display descriptors, report formats, and firmware can still differ. Please report successful or unsuccessful results. |
 
 ## Report Another Compatible Display
