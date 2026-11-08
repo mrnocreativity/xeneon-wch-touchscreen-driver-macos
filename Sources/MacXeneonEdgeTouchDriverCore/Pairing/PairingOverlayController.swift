@@ -6,16 +6,25 @@ import Foundation
 public protocol PairingOverlayPresenting: AnyObject {
     @discardableResult
     func show(on display: DisplaySnapshot, step: Int, total: Int) -> Bool
+    func showFallback(on display: DisplaySnapshot, nextDisplay: (() -> Void)?, cancel: @escaping () -> Void) -> Bool
     func isReady(on display: DisplaySnapshot) -> Bool
     func showConfirmation(on display: DisplaySnapshot)
     func hide()
 }
 
-/// Native full-screen pairing overlay.
-public final class PairingOverlayController: PairingOverlayPresenting {
-    private var window: NSWindow?
+public extension PairingOverlayPresenting {
+    func showFallback(on display: DisplaySnapshot, nextDisplay: (() -> Void)?, cancel: @escaping () -> Void) -> Bool {
+        show(on: display, step: 1, total: 1)
+    }
+}
 
-    public init() {}
+/// Native full-screen pairing overlay.
+public final class PairingOverlayController: NSObject, PairingOverlayPresenting {
+    private var window: NSWindow?
+    private var nextDisplay: (() -> Void)?
+    private var cancelFallback: (() -> Void)?
+
+    public override init() { super.init() }
 
     @discardableResult
     public func show(on display: DisplaySnapshot, step: Int, total: Int) -> Bool {
@@ -39,6 +48,19 @@ public final class PairingOverlayController: PairingOverlayPresenting {
         }
     }
 
+    public func showFallback(
+        on display: DisplaySnapshot, nextDisplay: (() -> Void)?, cancel: @escaping () -> Void
+    ) -> Bool {
+        present(
+            on: display,
+            title: "Touch and release the circle",
+            detail: "If this is your touchscreen, touch the circle.",
+            target: PairingChallenge.target,
+            nextDisplay: nextDisplay,
+            cancel: cancel
+        )
+    }
+
     public func showConfirmation(on display: DisplaySnapshot) {
         _ = present(on: display, title: "Paired", detail: "Touch input is assigned to this display")
     }
@@ -47,10 +69,15 @@ public final class PairingOverlayController: PairingOverlayPresenting {
         runOnMain { [weak self] in
             self?.window?.orderOut(nil)
             self?.window = nil
+            self?.nextDisplay = nil
+            self?.cancelFallback = nil
         }
     }
 
-    private func present(on display: DisplaySnapshot, title: String, detail: String, target: CGPoint? = nil) -> Bool {
+    private func present(
+        on display: DisplaySnapshot, title: String, detail: String, target: CGPoint? = nil,
+        nextDisplay: (() -> Void)? = nil, cancel: (() -> Void)? = nil
+    ) -> Bool {
         runOnMainReturning { [weak self] in
             let screens = NSScreen.screens
             let mainDisplayID = CGMainDisplayID()
@@ -107,9 +134,24 @@ public final class PairingOverlayController: PairingOverlayPresenting {
             window.backgroundColor = NSColor(calibratedWhite: 0.035, alpha: 0.98)
             window.isOpaque = true
             window.hasShadow = false
-            window.ignoresMouseEvents = true
+            window.ignoresMouseEvents = cancel == nil
             window.collectionBehavior = [.fullScreenAuxiliary, .stationary]
-            window.contentView = PairingOverlayView(title: title, detail: detail, target: target)
+            let view = PairingOverlayView(title: title, detail: detail, target: target)
+            if cancel != nil {
+                let buttons = NSStackView()
+                buttons.spacing = 12
+                buttons.addArrangedSubview(PairingButton(title: "Cancel", target: self, action: #selector(cancelFallbackPairing)))
+                if nextDisplay != nil {
+                    buttons.addArrangedSubview(PairingButton(title: "Next Display", target: self, action: #selector(showNextDisplay)))
+                }
+                buttons.translatesAutoresizingMaskIntoConstraints = false
+                view.addSubview(buttons)
+                NSLayoutConstraint.activate([
+                    buttons.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+                    buttons.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -24)
+                ])
+            }
+            window.contentView = view
             window.setFrame(expectedFrame, display: true)
 
             guard Self.displayID(for: window.screen) == display.displayID,
@@ -124,15 +166,27 @@ public final class PairingOverlayController: PairingOverlayPresenting {
             }
 
             self.window = window
+            self.nextDisplay = nextDisplay
+            self.cancelFallback = cancel
             window.orderFrontRegardless()
             guard window.isVisible, Self.displayID(for: window.screen) == display.displayID,
                   PairingOverlayGeometry.framesMatch(window.frame, expectedFrame) else {
                 window.orderOut(nil)
                 self.window = nil
+                self.nextDisplay = nil
+                self.cancelFallback = nil
                 return false
             }
             return true
         }
+    }
+
+    @objc private func showNextDisplay() {
+        nextDisplay?()
+    }
+
+    @objc private func cancelFallbackPairing() {
+        cancelFallback?()
     }
 
     private static func screen(
@@ -214,6 +268,10 @@ enum PairingOverlayGeometry {
             abs(lhs.width - rhs.width) <= tolerance &&
             abs(lhs.height - rhs.height) <= tolerance
     }
+}
+
+private final class PairingButton: NSButton {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
 private final class PairingOverlayView: NSView {

@@ -22,7 +22,8 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
         XCTAssertTrue(try statusRecords(app).isEmpty)
         app.handleDeviceMatched(controller)
         app.refreshDisplayMappings(reason: "controller appears before its display")
-        XCTAssertEqual(try statusRecords(app).first?["state"] as? String, "waitingForHardware")
+        XCTAssertNil(try statusRecords(app).first?["displayID"])
+        XCTAssertFalse(overlay.calls.contains(.fallback(monitor.runtimeIdentifier)))
         displays.append(first)
         app.refreshDisplayMappings(reason: "first unique observation")
         XCTAssertNil(try statusRecords(app).first?["displayID"])
@@ -47,6 +48,64 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
         XCTAssertTrue(overlay.calls.contains(.show("FIRST", 1, 2)))
         XCTAssertEqual(try statusRecords(app).compactMap { $0["state"] as? String }, ["calibrating", "calibrating"])
         XCTAssertTrue(store.pairings.isEmpty)
+    }
+
+    func testUnlistedDisplayCanPairAfterSkippingAnOrdinaryMonitor() throws {
+        let ordinary = DisplaySnapshot(displayID: 10, runtimeIdentifier: "ORDINARY",
+            vendorNumber: 100, modelNumber: 200, serialNumber: 0,
+            bounds: CGRect(x: 0, y: 0, width: 1920, height: 1080), pixelsWide: 1920, pixelsHigh: 1080)
+        let unknown = DisplaySnapshot(displayID: 11, runtimeIdentifier: "UNLISTED",
+            vendorNumber: 500, modelNumber: 600, serialNumber: 0,
+            bounds: CGRect(x: 1920, y: 0, width: 1280, height: 480), pixelsWide: 1280, pixelsHigh: 480)
+        let device = TouchDeviceIdentity(locationID: 1)
+        let store = pairingStore()
+        let overlay = ApplicationRecordingPairingOverlay()
+        let input = ApplicationRecordingInputSink()
+        let app = MacXeneonEdgeTouchDriverApplication(automaticallyScheduleConfidence: false,
+            configuration: immediateConfiguration(),
+            displayResolver: DisplayResolver(activeDisplayProvider: { [ordinary, unknown] }),
+            inputSink: input, cursorController: ApplicationRecordingCursorController(),
+            pairingStore: store, pairingOverlay: overlay)
+
+        app.handleDeviceMatched(device)
+        app.refreshDisplayMappings(reason: "controller with an unlisted display")
+        XCTAssertTrue(overlay.calls.contains(.fallback("ORDINARY")))
+        XCTAssertNil(try statusRecords(app).first?["displayID"])
+
+        overlay.advanceFallback()
+        waitForAsyncWork(milliseconds: 50)
+        XCTAssertTrue(overlay.calls.contains(.fallback("UNLISTED")))
+        performCalibration(app, device: device)
+        XCTAssertTrue(input.calls.isEmpty)
+        XCTAssertEqual(store.pairings.first?.displayID, unknown.displayID)
+        XCTAssertEqual(try statusRecords(app).first?["displayID"] as? UInt32, unknown.displayID)
+
+        app.handleDeviceRemoval(device)
+        app.refreshDisplayMappings(reason: "controller unplugged")
+        XCTAssertTrue(try statusRecords(app).isEmpty)
+        app.handleDeviceMatched(device)
+        app.refreshDisplayMappings(reason: "controller with ambiguous identity reconnected")
+        XCTAssertNil(try statusRecords(app).first?["displayID"])
+        XCTAssertEqual(try statusRecords(app).first?["state"] as? String, "calibrating")
+    }
+
+    func testSavedUnlistedDisplayPairingRestoresWithUniqueHardwareIDs() throws {
+        let target = DisplaySnapshot(displayID: 11, vendorNumber: 500, modelNumber: 600, serialNumber: 700,
+            bounds: CGRect(x: 0, y: 0, width: 1280, height: 480), pixelsWide: 1280, pixelsHigh: 480)
+        let original = TouchDeviceIdentity(locationID: 1, serialNumber: "TOUCH-A")
+        let reconnected = TouchDeviceIdentity(locationID: 2, serialNumber: "TOUCH-A")
+        let store = pairingStore()
+        try store.assign(device: original, to: target, connectedDevices: [original], displays: [target])
+        let overlay = ApplicationRecordingPairingOverlay()
+        let app = MacXeneonEdgeTouchDriverApplication(configuration: immediateConfiguration(),
+            displayResolver: DisplayResolver(activeDisplayProvider: { [target] }),
+            inputSink: ApplicationRecordingInputSink(), cursorController: ApplicationRecordingCursorController(),
+            pairingStore: store, pairingOverlay: overlay)
+
+        app.handleDeviceMatched(reconnected)
+        app.refreshDisplayMappings(reason: "unlisted hardware pairing reconnects")
+        XCTAssertEqual(try statusRecords(app).first?["displayID"] as? UInt32, target.displayID)
+        XCTAssertFalse(overlay.calls.contains(.fallback(target.runtimeIdentifier)))
     }
 
     func testHeldFingerCannotBecomeDelayedClickAfterResponsivenessRecovery() throws {
@@ -1194,6 +1253,7 @@ private final class ApplicationRecordingCursorController: CursorController {
 private final class ApplicationRecordingPairingOverlay: PairingOverlayPresenting {
     enum Call: Equatable {
         case show(String, Int, Int)
+        case fallback(String)
         case confirmation(String)
         case hide
     }
@@ -1201,6 +1261,7 @@ private final class ApplicationRecordingPairingOverlay: PairingOverlayPresenting
     private var storedCalls: [Call] = []
     private let canShow: Bool
     private var failuresBeforeSuccess: Int
+    private var nextDisplay: (() -> Void)?
     var ready = true
     var calls: [Call] {
         lock.lock()
@@ -1222,6 +1283,19 @@ private final class ApplicationRecordingPairingOverlay: PairingOverlayPresenting
         return canShow
     }
     func isReady(on display: DisplaySnapshot) -> Bool { ready }
+    func showFallback(on display: DisplaySnapshot, nextDisplay: (() -> Void)?, cancel: @escaping () -> Void) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        storedCalls.append(.fallback(display.runtimeIdentifier))
+        self.nextDisplay = nextDisplay
+        return canShow
+    }
+    func advanceFallback() {
+        lock.lock()
+        let advance = nextDisplay
+        lock.unlock()
+        advance?()
+    }
     func showConfirmation(on display: DisplaySnapshot) {
         lock.lock()
         storedCalls.append(.confirmation(display.runtimeIdentifier))

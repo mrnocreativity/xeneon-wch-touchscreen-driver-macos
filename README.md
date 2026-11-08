@@ -253,6 +253,8 @@ The driver checks for pairing whenever a supported USB touch controller connects
 
 Default display matching recognizes the Corsair Xeneon Edge and Prechen HD-123 panels that report the `12.3FHD` display identity. Changing the `display` settings from their default values limits matching to that custom profile.
 
+When a supported controller has no built-in display match, the default setup offers physical pairing on external displays. Use **Next Display** if the target appears on a different monitor, then touch and release the circle on your touchscreen. After a successful pairing, the driver offers a copy-ready GitHub compatibility report once per display vendor and model. **No Thanks** dismisses the invitation for that model.
+
 When physical pairing is needed, the driver covers one compatible display with **Touch and release the circle**. Touch and release the central circle once, then repeat when the prompt moves to the next display. The physical contact must begin after the target appears, stay near it, and complete within two seconds. Calibration does not generate mouse clicks. Verified associations are saved atomically in:
 
 ```text

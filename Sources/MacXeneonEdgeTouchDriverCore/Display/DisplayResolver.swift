@@ -26,6 +26,7 @@ public struct DisplaySnapshot: Equatable {
 
     /// Physical pixel height.
     public let pixelsHigh: Int
+    let isExternalPairingCandidate: Bool
 
     /// Creates a display snapshot for matching or tests.
     public init(
@@ -36,7 +37,8 @@ public struct DisplaySnapshot: Equatable {
         serialNumber: UInt32,
         bounds: CGRect,
         pixelsWide: Int,
-        pixelsHigh: Int
+        pixelsHigh: Int,
+        isExternalPairingCandidate: Bool = true
     ) {
         self.displayID = displayID
         self.runtimeIdentifier = runtimeIdentifier.isEmpty ? "display-\(displayID)" : runtimeIdentifier
@@ -46,6 +48,7 @@ public struct DisplaySnapshot: Equatable {
         self.bounds = bounds
         self.pixelsWide = pixelsWide
         self.pixelsHigh = pixelsHigh
+        self.isExternalPairingCandidate = isExternalPairingCandidate
     }
 
     /// Public hardware key usable only after the pairing coordinator proves uniqueness.
@@ -209,7 +212,8 @@ public final class DisplayResolver {
             serialNumber: CGDisplaySerialNumber(displayID),
             bounds: CGDisplayBounds(displayID),
             pixelsWide: CGDisplayPixelsWide(displayID),
-            pixelsHigh: CGDisplayPixelsHigh(displayID)
+            pixelsHigh: CGDisplayPixelsHigh(displayID),
+            isExternalPairingCandidate: CGDisplayIsBuiltin(displayID) == 0 && CGDisplayIsInMirrorSet(displayID) == 0
         )
     }
 

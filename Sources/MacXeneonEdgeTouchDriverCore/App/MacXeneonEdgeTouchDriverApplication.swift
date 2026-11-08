@@ -36,6 +36,10 @@ public final class MacXeneonEdgeTouchDriverApplication {
     private let stormDiagnosticQueue = BoundedDiagnosticQueue(capacity: 2)
     private let stormCaptureLog = DriverFileLog()
     private var compatibleDisplays: [DisplaySnapshot] = []
+    private var fallbackDisplayID: CGDirectDisplayID?
+    private var fallbackDismissed = false
+    private var isFallbackPairing = false
+    private var compatibilityReporter: CompatibilityReporter?
     private var pairingTarget: DisplaySnapshot?
     private var pairingAdvanceWork: DispatchWorkItem?
     private var reconciliationWork: DispatchWorkItem?
@@ -85,6 +89,7 @@ public final class MacXeneonEdgeTouchDriverApplication {
             requiredStablePairingTopologyObservations: 2,
             pairingTopologyRetryDelay: .milliseconds(750)
         )
+        compatibilityReporter = CompatibilityReporter()
     }
 
     public init(
@@ -533,7 +538,14 @@ public final class MacXeneonEdgeTouchDriverApplication {
         if let automaticPairing, automaticPairing.device == device {
             return automaticPairing.display
         }
-        return pairingStore.resolveDisplay(for: device, connectedDevices: connectedDevices, displays: compatibleDisplays)
+        return pairingStore.resolveDisplay(for: device, connectedDevices: connectedDevices, displays: pairingDisplays)
+    }
+
+    private var pairingDisplays: [DisplaySnapshot] {
+        if configuration.display == DriverConfiguration.defaults.display {
+            return lastObservedDisplays ?? compatibleDisplays
+        }
+        return compatibleDisplays
     }
 
     private func beginPairingIfNeeded(resolvedDisplays: [TouchDeviceIdentity: DisplaySnapshot]? = nil) {
@@ -559,10 +571,18 @@ public final class MacXeneonEdgeTouchDriverApplication {
             resetPairingTopologyStability()
             pairingTopologyWaitDescription = nil
             pairingOverlay.hide()
+            compatibilityReporter?.presentPending()
             return
         }
 
-        guard unresolved.count == candidates.count, let target = candidates.first else {
+        let fallback = candidates.count < unresolved.count && configuration.display == DriverConfiguration.defaults.display
+        if fallback, fallbackDismissed { return }
+        let available = fallback ? pairingDisplays.filter {
+            $0.isExternalPairingCandidate && !usedDisplayIDs.contains($0.displayID)
+        } : candidates
+        let selected = fallback ? available.first { $0.displayID == fallbackDisplayID } : nil
+        guard (fallback ? available.count >= unresolved.count : available.count == unresolved.count),
+              let target = selected ?? available.first else {
             for device in unresolved {
                 setAuthority(device, phase: .waitingForHardware, reason: "Waiting for complete controller/display topology")
             }
@@ -570,6 +590,7 @@ public final class MacXeneonEdgeTouchDriverApplication {
             overlayPresentationAttempt = 0
             resetPairingTopologyStability()
             pairingOverlay.hide()
+            compatibilityReporter?.presentPending()
             waitForPairingTopology(
                 "Waiting for complete pairing topology: \(unresolved.count) unresolved controller(s), \(candidates.count) unused compatible display(s)."
             )
@@ -578,7 +599,7 @@ public final class MacXeneonEdgeTouchDriverApplication {
 
         let topologySignature = PairingTopologySignature(
             devices: connectedDevices,
-            displays: compatibleDisplays
+            displays: pairingDisplays
         )
         if pairingTopologySignature == topologySignature {
             stablePairingTopologyObservationCount += 1
@@ -596,7 +617,7 @@ public final class MacXeneonEdgeTouchDriverApplication {
         }
         pairingTopologyWaitDescription = nil
 
-        if !requiresPhysicalPairing, connectedDevices.count == 1, compatibleDisplays.count == 1,
+        if !fallback, !requiresPhysicalPairing, connectedDevices.count == 1, compatibleDisplays.count == 1,
            let device = unresolved.first, let session = sessions[device] {
             // A unique live topology is enough to route input, but it is not
             // physical evidence to save or reuse when more endpoints appear.
@@ -610,9 +631,36 @@ public final class MacXeneonEdgeTouchDriverApplication {
             return
         }
 
-        let total = min(connectedDevices.count, compatibleDisplays.count)
-        let step = min(resolved.count + 1, total)
-        guard pairingOverlay.show(on: target, step: step, total: total) else {
+        let presented: Bool
+        if fallback {
+            let expectedGeneration = generation
+            let changeTarget: (CGDirectDisplayID?) -> Void = { [weak self] nextID in
+                self?.gestureQueue.async { [weak self] in
+                    guard let self, self.generation == expectedGeneration, self.pairingTarget == target else { return }
+                    self.fallbackDisplayID = nextID
+                    self.fallbackDismissed = nextID == nil
+                    self.cancelPairingPresentation()
+                    if nextID != nil {
+                        self.beginPairingIfNeeded()
+                    } else {
+                        self.compatibilityReporter?.presentPending()
+                    }
+                }
+            }
+            let nextDisplay: (() -> Void)?
+            if available.count > 1, let index = available.firstIndex(of: target) {
+                let nextID = available[(index + 1) % available.count].displayID
+                nextDisplay = { changeTarget(nextID) }
+            } else {
+                nextDisplay = nil
+            }
+            presented = pairingOverlay.showFallback(on: target, nextDisplay: nextDisplay, cancel: { changeTarget(nil) })
+        } else {
+            let total = min(connectedDevices.count, compatibleDisplays.count)
+            let step = min(resolved.count + 1, total)
+            presented = pairingOverlay.show(on: target, step: step, total: total)
+        }
+        guard presented else {
             pairingTarget = nil
             schedulePairingOverlayRetry()
             return
@@ -620,6 +668,7 @@ public final class MacXeneonEdgeTouchDriverApplication {
 
         overlayPresentationAttempt = 0
         pairingTarget = target
+        isFallbackPairing = fallback
         challenge = PairingChallenge(readyAt: DispatchTime.now().uptimeNanoseconds, generation: generation)
         for device in unresolved { setAuthority(device, phase: .calibrating, reason: "Touch and release the visible target") }
         DriverLoggers.log(.notice, category: .display, "Waiting for a raw touch on display ID \(target.displayID).")
@@ -639,7 +688,7 @@ public final class MacXeneonEdgeTouchDriverApplication {
         let existingDisplayIsActive = pairingStore.resolveDisplay(
             for: event.device,
             connectedDevices: connectedDevices,
-            displays: compatibleDisplays
+            displays: pairingDisplays
         ) != nil
         guard !existingDisplayIsActive else {
             DriverLoggers.log(.debug, category: .display, "Ignoring pairing touch from an already resolved controller.")
@@ -650,7 +699,7 @@ public final class MacXeneonEdgeTouchDriverApplication {
         guard pairingOverlay.isReady(on: target), observationGate.allowsRouting,
               observationGate.revision == observationRevision,
               pairingTopologySignature == PairingTopologySignature(
-                devices: connectedDevices, displays: displayResolver.matchingDisplays(from: currentDisplays)),
+                devices: connectedDevices, displays: pairingDisplays),
               lastObservedDisplays == currentDisplays else {
             suspendRouting(reason: "Calibration display changed")
             scheduleDisplayReconciliation(reason: "Calibration placement revalidation")
@@ -680,7 +729,7 @@ public final class MacXeneonEdgeTouchDriverApplication {
                 device: event.device,
                 to: target,
                 connectedDevices: connectedDevices,
-                displays: compatibleDisplays
+                displays: pairingDisplays
             )
             guard observationGate.allowsRouting, observationGate.revision == observationRevision else {
                 try pairingStore.remove(device: event.device)
@@ -691,10 +740,17 @@ public final class MacXeneonEdgeTouchDriverApplication {
             challengeTimeout?.cancel()
             self.challenge = nil
             pairingTarget = nil
+            fallbackDisplayID = nil
             pairingOverlay.showConfirmation(on: target)
             DriverLoggers.log(.notice, category: .display, "Paired controller \(event.device.hexadecimalLocationID) to display ID \(target.displayID).")
             refreshSessionMapper(for: event.device, display: target)
             setAuthority(event.device, phase: .active, reason: "Physical target contact verified")
+            if isFallbackPairing, !SupportedDisplayCatalog.entries.contains(where: {
+                $0.vendorNumber == target.vendorNumber && $0.modelNumber == target.modelNumber
+            }) {
+                compatibilityReporter?.enqueue(target)
+            }
+            isFallbackPairing = false
 
             pairingAdvanceWork?.cancel()
             let expectedGeneration = generation
@@ -886,6 +942,8 @@ public final class MacXeneonEdgeTouchDriverApplication {
     private func suspendRouting(reason: String) {
         observationGate.suspend()
         automaticPairing = nil
+        fallbackDisplayID = nil
+        fallbackDismissed = false
         generation &+= 1
         reconciliationWork?.cancel()
         cancelPairingPresentation()
@@ -1029,6 +1087,7 @@ public final class MacXeneonEdgeTouchDriverApplication {
             calibrationPaused = true
             waitingForStormRecovery = false
             cancelPairingPresentation()
+            compatibilityReporter?.presentPending()
             for device in connectedDevices where authority[device]?.phase != .active {
                 setAuthority(device, phase: .suspended, reason: "Calibration cancelled; use re-pair to resume")
             }
@@ -1179,6 +1238,7 @@ public final class MacXeneonEdgeTouchDriverApplication {
 
     private func cancelPairingPresentation() {
         challenge = nil
+        isFallbackPairing = false
         for device in connectedDevices where authority[device]?.phase == .calibrating {
             setAuthority(device, phase: .needsPairing, reason: "Awaiting a fresh calibration presentation")
         }
