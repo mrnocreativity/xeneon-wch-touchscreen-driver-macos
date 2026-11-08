@@ -17,6 +17,7 @@ final class TouchscreenChooser: NSObject, NSWindowDelegate {
     private var confirmButton: NSButton?
     private var requiredCount = 0
     private var completion: ((Set<CGDirectDisplayID>?) -> Void)?
+    private var verificationCompletion: ((Bool) -> Void)?
     private let setupSpaces: NSWindow.CollectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
     func show(
@@ -48,7 +49,7 @@ final class TouchscreenChooser: NSObject, NSWindowDelegate {
                              styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.setFrameOrigin(CGPoint(x: frame.midX - window.frame.width / 2, y: frame.midY - window.frame.height / 2))
 
-        let heading = NSTextField(labelWithString: "Choose your touchscreens")
+        let heading = NSTextField(labelWithString: "Mark which displays are touchscreens")
         heading.font = .boldSystemFont(ofSize: 17)
         let instruction = NSTextField(wrappingLabelWithString: count == 1
             ? "Use your mouse or trackpad to select one display. Click its number on the screen or use the list below. Touch input is off until pairing."
@@ -118,6 +119,29 @@ final class TouchscreenChooser: NSObject, NSWindowDelegate {
         ])
         panel = window
         selectionChanged()
+        return showPrompt(
+            on: frame, title: "Identify which displays are touchscreens",
+            detail: "On the next screen, use your mouse or trackpad to mark the displays that have touch input.",
+            nextAction: #selector(showDisplays)
+        )
+    }
+
+    func explainVerification(completion: @escaping (Bool) -> Void) {
+        hide()
+        guard let screen = NSScreen.screens.first(where: {
+            PairingOverlayController.displayID(for: $0) == CGMainDisplayID()
+        }) else { completion(false); return }
+        verificationCompletion = completion
+        if !showPrompt(
+            on: screen.visibleFrame, title: "Verify your touchscreens",
+            detail: "After clicking Next, tap and release the circle on the touchscreen with your finger. The screen updates once the driver verifies the touch. Repeat for each touchscreen if prompted.",
+            nextAction: #selector(beginVerification)
+        ) {
+            completion(false)
+        }
+    }
+
+    private func showPrompt(on frame: CGRect, title: String, detail message: String, nextAction: Selector) -> Bool {
         let intro = NSPanel(contentRect: CGRect(x: 0, y: 0, width: 450, height: 164),
                             styleMask: [.titled, .closable], backing: .buffered, defer: false)
         intro.title = "Touchscreen Setup"
@@ -127,13 +151,12 @@ final class TouchscreenChooser: NSObject, NSWindowDelegate {
         intro.isReleasedWhenClosed = false
         intro.delegate = self
         intro.setFrameOrigin(CGPoint(x: frame.midX - intro.frame.width / 2, y: frame.midY - intro.frame.height / 2))
-        let introHeading = NSTextField(labelWithString: "Identify your touchscreens")
+        let introHeading = NSTextField(labelWithString: title)
         introHeading.font = .boldSystemFont(ofSize: 17)
-        let detail = NSTextField(wrappingLabelWithString:
-            "On the next screen, use your mouse or trackpad to select which displays are touchscreens. Then follow the touch targets to finish pairing.")
+        let detail = NSTextField(wrappingLabelWithString: message)
         let introCancel = NSButton(title: "Cancel", target: self, action: #selector(cancelSelection))
         introCancel.keyEquivalent = "\u{1b}"
-        let next = NSButton(title: "Next", target: self, action: #selector(showDisplays))
+        let next = NSButton(title: "Next", target: self, action: nextAction)
         next.keyEquivalent = "\r"
         let introButtons = NSStackView(views: [introCancel, next])
         introButtons.spacing = 10
@@ -223,9 +246,14 @@ final class TouchscreenChooser: NSObject, NSWindowDelegate {
         badge.target = self
         badge.action = #selector(toggleDisplay(_:))
         badge.isEnabled = enabled
-        badgeWindow.contentView = badge
-        badgeWindow.setFrame(CGRect(x: screen.frame.midX - diameter / 2, y: badgeBottom,
-                                    width: diameter, height: diameter), display: true)
+        let glowMargin: CGFloat = 16
+        let badgeContent = NSView()
+        badge.setFrameOrigin(CGPoint(x: glowMargin, y: glowMargin))
+        badgeContent.addSubview(badge)
+        badgeWindow.contentView = badgeContent
+        let badgeFrame = CGRect(x: screen.frame.midX - diameter / 2, y: badgeBottom,
+                                width: diameter, height: diameter)
+        badgeWindow.setFrame(badgeFrame.insetBy(dx: -glowMargin, dy: -glowMargin), display: true)
         return (overlay, badgeWindow, badge)
     }
 
@@ -248,8 +276,19 @@ final class TouchscreenChooser: NSObject, NSWindowDelegate {
         finish(selection)
     }
 
-    @objc private func cancelSelection() { finish(nil) }
-    func windowWillClose(_ notification: Notification) { finish(nil) }
+    @objc private func beginVerification() { finishVerification(true) }
+
+    @objc private func cancelSelection() {
+        if verificationCompletion != nil { finishVerification(false) }
+        else { finish(nil) }
+    }
+    func windowWillClose(_ notification: Notification) { cancelSelection() }
+
+    private func finishVerification(_ confirmed: Bool) {
+        let callback = verificationCompletion
+        hide()
+        callback?(confirmed)
+    }
 
     private func finish(_ selection: Set<CGDirectDisplayID>?) {
         let callback = completion
@@ -271,6 +310,7 @@ final class TouchscreenChooser: NSObject, NSWindowDelegate {
         rows.removeAll()
         confirmButton = nil
         completion = nil
+        verificationCompletion = nil
     }
 }
 
@@ -287,7 +327,6 @@ private final class DisplayNumberBadge: NSButton {
         setAccessibilityLabel("Select display \(number)")
         wantsLayer = true
         layer?.cornerRadius = diameter / 2
-        layer?.borderWidth = 3
     }
 
     @available(*, unavailable)
@@ -296,9 +335,7 @@ private final class DisplayNumberBadge: NSButton {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     func update(selected: Bool) {
-        let green = NSColor(srgbRed: 0, green: 0.67, blue: 0.22, alpha: 1)
-        layer?.backgroundColor = (selected ? green : .black).cgColor
-        layer?.borderColor = (selected ? green : .white).cgColor
+        if let layer { TouchscreenTargetStyle.apply(to: layer, selected: selected) }
         setAccessibilityValue(selected ? "Selected" : "Unselected")
     }
 }

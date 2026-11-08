@@ -17,6 +17,7 @@ final class InstallerDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         operationInProgress ? .terminateCancel : .terminateNow
     }
+    @objc func dismissCompletion() { NSApp.stopModal() }
 }
 let installerDelegate = InstallerDelegate()
 application.delegate = installerDelegate
@@ -223,16 +224,7 @@ func waitForDriverSetup() -> DriverSetup? {
 func showInstalled(_ setup: DriverSetup?) {
     switch setup {
     case .ready:
-        let alert = NSAlert()
-        alert.messageText = "Your touchscreen driver is ready"
-        alert.informativeText = "Setup is complete. The driver is running in the background and starts automatically when you log in."
-        let mark = NSImage.SymbolConfiguration(pointSize: 48, weight: .regular)
-            .applying(NSImage.SymbolConfiguration(paletteColors: [.white, .systemGreen]))
-        alert.icon = NSImage(systemSymbolName: "checkmark.circle.fill", accessibilityDescription: nil)?
-            .withSymbolConfiguration(mark)
-        alert.addButton(withTitle: "Done")
-        application.activate(ignoringOtherApps: true)
-        alert.runModal()
+        showCompletion()
     case .waitingForHardware:
         showMessage("Connect a supported touchscreen",
                     "The driver is installed. Connect your touchscreen over USB to continue setup.")
@@ -246,6 +238,40 @@ func showInstalled(_ setup: DriverSetup?) {
                     "The driver files were installed, but the driver did not report that it started. Try Install or Update again.",
                     style: .warning)
     }
+}
+
+func showCompletion() {
+    let window = NSPanel(contentRect: CGRect(x: 0, y: 0, width: 400, height: 222),
+                         styleMask: [.titled], backing: .buffered, defer: false)
+    window.title = "Touchscreen Setup"
+    let checkmark = NSImageView()
+    checkmark.image = NSImage(systemSymbolName: "checkmark.circle.fill", accessibilityDescription: nil)
+    checkmark.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 54, weight: .regular)
+        .applying(NSImage.SymbolConfiguration(paletteColors: [.white, .systemGreen]))
+    let title = NSTextField(labelWithString: "Your touchscreen driver is ready")
+    title.font = .boldSystemFont(ofSize: 17)
+    let message = NSTextField(wrappingLabelWithString:
+        "The driver is running in the background and starts automatically when you log in.")
+    message.alignment = .center
+    let done = NSButton(title: "Done", target: installerDelegate, action: #selector(InstallerDelegate.dismissCompletion))
+    done.keyEquivalent = "\r"
+    let stack = NSStackView(views: [checkmark, title, message, done])
+    stack.orientation = .vertical
+    stack.alignment = .centerX
+    stack.spacing = 12
+    stack.translatesAutoresizingMaskIntoConstraints = false
+    guard let content = window.contentView else { return }
+    content.addSubview(stack)
+    NSLayoutConstraint.activate([
+        stack.centerXAnchor.constraint(equalTo: content.centerXAnchor),
+        stack.centerYAnchor.constraint(equalTo: content.centerYAnchor),
+        message.widthAnchor.constraint(equalToConstant: 320)
+    ])
+    window.center()
+    application.activate(ignoringOtherApps: true)
+    window.makeKeyAndOrderFront(nil)
+    application.runModal(for: window)
+    window.orderOut(nil)
 }
 
 let menu = NSMenu()

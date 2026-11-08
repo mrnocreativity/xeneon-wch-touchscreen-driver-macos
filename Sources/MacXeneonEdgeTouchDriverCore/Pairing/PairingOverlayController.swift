@@ -10,6 +10,7 @@ public protocol PairingOverlayPresenting: AnyObject {
         from displays: [DisplaySnapshot], eligible: Set<CGDirectDisplayID>, count: Int,
         completion: @escaping (Set<CGDirectDisplayID>?) -> Void
     ) -> Bool
+    func explainVerification(completion: @escaping (Bool) -> Void)
     func isReady(on display: DisplaySnapshot) -> Bool
     func showConfirmation(on display: DisplaySnapshot)
     func hide()
@@ -20,6 +21,7 @@ public extension PairingOverlayPresenting {
         from displays: [DisplaySnapshot], eligible: Set<CGDirectDisplayID>, count: Int,
         completion: @escaping (Set<CGDirectDisplayID>?) -> Void
     ) -> Bool { false }
+    func explainVerification(completion: @escaping (Bool) -> Void) { completion(true) }
 }
 
 /// Native full-screen pairing overlay.
@@ -64,6 +66,10 @@ public final class PairingOverlayController: PairingOverlayPresenting {
 
     public func showConfirmation(on display: DisplaySnapshot) {
         _ = present(on: display, title: "Paired", detail: "Touch input is assigned to this display")
+    }
+
+    public func explainVerification(completion: @escaping (Bool) -> Void) {
+        runOnMain { self.chooser.explainVerification(completion: completion) }
     }
 
     public func hide() {
@@ -262,16 +268,35 @@ enum TouchscreenOverlayBackdrop {
     }
 }
 
+enum TouchscreenTargetStyle {
+    static func apply(to layer: CALayer, selected: Bool) {
+        let green = NSColor(srgbRed: 0, green: 0.67, blue: 0.22, alpha: 1)
+        let edge = selected ? green : .white
+        layer.backgroundColor = (selected ? green : .black).cgColor
+        layer.borderColor = edge.cgColor
+        layer.borderWidth = 3
+        layer.shadowColor = edge.cgColor
+        layer.shadowOpacity = 0.35
+        layer.shadowRadius = 9
+        layer.shadowOffset = .zero
+    }
+}
+
 private final class PairingOverlayView: NSView {
     private let titleText: String
     private let detailText: String
     private let target: CGPoint?
+    private let circle = NSView()
 
     init(title: String, detail: String, target: CGPoint?) {
         self.titleText = title
         self.detailText = detail
         self.target = target
         super.init(frame: .zero)
+        if target != nil {
+            circle.wantsLayer = true
+            addSubview(circle)
+        }
     }
 
     @available(*, unavailable)
@@ -292,18 +317,22 @@ private final class PairingOverlayView: NSView {
 
         drawCentered(titleText, atY: bounds.height - 70, attributes: titleAttributes)
         drawCentered(detailText, atY: bounds.height - 112, attributes: detailAttributes)
+    }
 
+    override func layout() {
+        super.layout()
         guard let target else { return }
         let radius: CGFloat = 30
-        let ring = NSBezierPath(ovalIn: CGRect(
+        circle.frame = CGRect(
             x: bounds.width * target.x - radius,
             y: bounds.height * (1 - target.y) - radius,
             width: radius * 2,
             height: radius * 2
-        ))
-        ring.lineWidth = 3
-        NSColor.systemIndigo.setStroke()
-        ring.stroke()
+        )
+        if let layer = circle.layer {
+            layer.cornerRadius = radius
+            TouchscreenTargetStyle.apply(to: layer, selected: false)
+        }
     }
 
     private func drawCentered(

@@ -6,6 +6,7 @@ import Foundation
 final class CompatibilityReporter: NSObject, NSWindowDelegate {
     private let defaults: UserDefaults
     private var pending: [(key: String, name: String, body: String)] = []
+    private var waitingForInstaller = false
     private var window: NSPanel?
     private var currentReport: (name: String, body: String)?
 
@@ -32,6 +33,18 @@ final class CompatibilityReporter: NSObject, NSWindowDelegate {
     func presentPending() {
         DispatchQueue.main.async { [weak self] in
             guard let self, self.window == nil, !self.pending.isEmpty else { return }
+            if NSRunningApplication.runningApplications(
+                withBundleIdentifier: "com.ajvwhite.MacXeneonEdgeTouchDriver.Installer"
+            ).contains(where: { !$0.isTerminated }) {
+                // Let the user finish the installer's confirmation before offering a report.
+                guard !self.waitingForInstaller else { return }
+                self.waitingForInstaller = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(500)) { [weak self] in
+                    self?.waitingForInstaller = false
+                    self?.presentPending()
+                }
+                return
+            }
             let report = self.pending.removeFirst()
             if self.claimPrompt(key: report.key) {
                 self.present(name: report.name, body: report.body)

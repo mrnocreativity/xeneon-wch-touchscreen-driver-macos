@@ -61,7 +61,7 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
             bounds: CGRect(x: 1920, y: 0, width: 1280, height: 480), pixelsWide: 1280, pixelsHigh: 480)
         let device = TouchDeviceIdentity(locationID: 1)
         let store = pairingStore()
-        let overlay = ApplicationRecordingPairingOverlay()
+        let overlay = ApplicationRecordingPairingOverlay(waitForVerification: true)
         let input = ApplicationRecordingInputSink()
         let app = MacXeneonEdgeTouchDriverApplication(automaticallyScheduleConfidence: false,
             configuration: immediateConfiguration(),
@@ -77,6 +77,10 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
         XCTAssertNil(try statusRecords(app).first?["displayID"])
 
         overlay.choose([unknown.displayID])
+        waitForAsyncWork(milliseconds: 50)
+        XCTAssertFalse(overlay.calls.contains(.show("UNLISTED", 1, 1)))
+        XCTAssertEqual(app.touchSetupState, "pairing")
+        overlay.confirmVerification()
         waitForAsyncWork(milliseconds: 50)
         XCTAssertTrue(overlay.calls.contains(.show("UNLISTED", 1, 1)))
         XCTAssertEqual(app.touchSetupState, "pairing")
@@ -1303,15 +1307,18 @@ private final class ApplicationRecordingPairingOverlay: PairingOverlayPresenting
     private let canShow: Bool
     private var failuresBeforeSuccess: Int
     private var selection: ((Set<CGDirectDisplayID>?) -> Void)?
+    private let waitForVerification: Bool
+    private var verification: ((Bool) -> Void)?
     var ready = true
     var calls: [Call] {
         lock.lock()
         defer { lock.unlock() }
         return storedCalls
     }
-    init(canShow: Bool = true, failuresBeforeSuccess: Int = 0) {
+    init(canShow: Bool = true, failuresBeforeSuccess: Int = 0, waitForVerification: Bool = false) {
         self.canShow = canShow
         self.failuresBeforeSuccess = failuresBeforeSuccess
+        self.waitForVerification = waitForVerification
     }
     func show(on display: DisplaySnapshot, step: Int, total: Int) -> Bool {
         lock.lock()
@@ -1340,6 +1347,19 @@ private final class ApplicationRecordingPairingOverlay: PairingOverlayPresenting
         selection = nil
         lock.unlock()
         completion?(ids)
+    }
+    func explainVerification(completion: @escaping (Bool) -> Void) {
+        guard waitForVerification else { completion(true); return }
+        lock.lock()
+        verification = completion
+        lock.unlock()
+    }
+    func confirmVerification() {
+        lock.lock()
+        let completion = verification
+        verification = nil
+        lock.unlock()
+        completion?(true)
     }
     func showConfirmation(on display: DisplaySnapshot) {
         lock.lock()

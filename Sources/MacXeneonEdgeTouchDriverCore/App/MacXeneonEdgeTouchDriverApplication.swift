@@ -139,7 +139,9 @@ public final class MacXeneonEdgeTouchDriverApplication {
                 self.gestureQueue.async {
                     if command == "setup-status" {
                         let state = self.observationGate.isMonitoring ? self.touchSetupState : "privacyRequired"
-                        reply(self.json(["state": state]))
+                        let result = self.json(["state": state])
+                        // Let the main thread finish any queued overlay dismissal before the installer opens Done.
+                        DispatchQueue.main.async { reply(result) }
                     } else {
                         guard self.observationGate.isMonitoring else {
                             reply("{\"error\":\"Driver setup is incomplete\"}")
@@ -685,15 +687,26 @@ public final class MacXeneonEdgeTouchDriverApplication {
             self?.gestureQueue.async { [weak self] in
                 guard let self, self.choosingTouchscreens, self.generation == expectedGeneration,
                       self.observationGate.revision == revision else { return }
-                self.choosingTouchscreens = false
-                guard let selection else {
+                guard let selection, selection.count == count, selection.isSubset(of: eligible) else {
+                    self.choosingTouchscreens = false
                     self.chooserDismissed = true
                     self.compatibilityReporter?.presentPending()
                     return
                 }
-                guard selection.count == count, selection.isSubset(of: eligible) else { return }
-                self.selectedTouchscreens = selection
-                self.beginPairingIfNeeded()
+                self.pairingOverlay.explainVerification { [weak self] confirmed in
+                    self?.gestureQueue.async { [weak self] in
+                        guard let self, self.choosingTouchscreens, self.generation == expectedGeneration,
+                              self.observationGate.revision == revision else { return }
+                        self.choosingTouchscreens = false
+                        guard confirmed else {
+                            self.chooserDismissed = true
+                            self.compatibilityReporter?.presentPending()
+                            return
+                        }
+                        self.selectedTouchscreens = selection
+                        self.beginPairingIfNeeded()
+                    }
+                }
             }
         }
         if choosingTouchscreens {
