@@ -257,17 +257,21 @@ func showCompletion() {
     done.keyEquivalent = "\r"
     window.defaultButtonCell = done.cell as? NSButtonCell
     window.initialFirstResponder = done
-    let stack = NSStackView(views: [checkmark, title, message, done])
+    let stack = NSStackView(views: [checkmark, title, message])
     stack.orientation = .vertical
     stack.alignment = .centerX
     stack.spacing = 12
     stack.translatesAutoresizingMaskIntoConstraints = false
+    done.translatesAutoresizingMaskIntoConstraints = false
     guard let content = window.contentView else { return }
     content.addSubview(stack)
+    content.addSubview(done)
     NSLayoutConstraint.activate([
         stack.centerXAnchor.constraint(equalTo: content.centerXAnchor),
-        stack.centerYAnchor.constraint(equalTo: content.centerYAnchor),
-        message.widthAnchor.constraint(equalToConstant: 320)
+        stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 24),
+        message.widthAnchor.constraint(equalToConstant: 320),
+        done.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
+        done.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -18)
     ])
     window.center()
     application.activate(ignoringOtherApps: true)

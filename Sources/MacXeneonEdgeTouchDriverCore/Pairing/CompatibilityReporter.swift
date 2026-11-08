@@ -9,6 +9,11 @@ final class CompatibilityReporter: NSObject, NSWindowDelegate {
     private var waitingForInstaller = false
     private var window: NSPanel?
     private var currentReport: (name: String, body: String)?
+    private var reportPreview: NSScrollView?
+    private var openGitHubButton: NSButton?
+    private var dismissButton: NSButton?
+    private let collapsedHeight: CGFloat = 295
+    private let previewHeight: CGFloat = 152
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -85,17 +90,18 @@ final class CompatibilityReporter: NSObject, NSWindowDelegate {
 
     private func present(name: String, body: String) {
         let panel = NSPanel(
-            contentRect: CGRect(x: 0, y: 0, width: 480, height: 300),
+            contentRect: CGRect(x: 0, y: 0, width: 480, height: collapsedHeight),
             styleMask: [.titled, .closable], backing: .buffered, defer: false
         )
         panel.title = "Touchscreen Paired"
         panel.isReleasedWhenClosed = false
+        panel.hidesOnDeactivate = false
         panel.delegate = self
 
         let heading = NSTextField(labelWithString: "Help us identify this touchscreen")
         heading.font = .boldSystemFont(ofSize: 17)
         let detail = NSTextField(wrappingLabelWithString:
-            "Your touchscreen paired successfully. You can help others find it by pasting this report into a new GitHub issue.")
+            "Your touchscreen paired successfully. Share a compatibility report to help other owners find it.")
         let scroll = NSScrollView(frame: CGRect(x: 0, y: 0, width: 440, height: 152))
         scroll.hasVerticalScroller = true
         scroll.borderType = .bezelBorder
@@ -106,33 +112,51 @@ final class CompatibilityReporter: NSObject, NSWindowDelegate {
         text.isVerticallyResizable = true
         text.autoresizingMask = [.width]
         scroll.documentView = text
+        scroll.isHidden = true
 
         let dismiss = NSButton(title: "No Thanks", target: self, action: #selector(dismissReport))
         dismiss.keyEquivalent = "\u{1b}"
-        let copy = NSButton(title: "Copy Report and Open GitHub", target: self, action: #selector(copyReport))
-        copy.keyEquivalent = "\r"
-        let buttons = NSStackView(views: [dismiss, copy])
-        buttons.spacing = 10
-        let stack = NSStackView(views: [heading, detail, scroll, buttons])
+        dismiss.translatesAutoresizingMaskIntoConstraints = false
+        let copy = NSButton(title: "Copy Report", target: self, action: #selector(copyReport(_:)))
+        let open = NSButton(title: "Open GitHub", target: self, action: #selector(openGitHub))
+        let previewLink = NSButton(title: "Show report", target: self, action: #selector(togglePreview(_:)))
+        previewLink.isBordered = false
+        stylePreviewLink(previewLink, title: "Show report")
+        let copyStep = reportStep("1. Copy the compatibility report.", button: copy)
+        let openStep = reportStep("2. Open a new GitHub issue.", button: open)
+        let pasteStep = NSTextField(wrappingLabelWithString: "3. Paste the report into the issue description.")
+        let submitStep = NSTextField(wrappingLabelWithString: "4. Review the issue, then click Submit new issue.")
+        let stack = NSStackView(views: [heading, detail, copyStep, previewLink, scroll, openStep, pasteStep, submitStep])
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 12
+        stack.spacing = 8
+        stack.detachesHiddenViews = true
         stack.translatesAutoresizingMaskIntoConstraints = false
         if let content = panel.contentView {
             content.addSubview(stack)
+            content.addSubview(dismiss)
             NSLayoutConstraint.activate([
                 stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
                 stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
                 stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 20),
-                stack.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor, constant: -20),
+                stack.bottomAnchor.constraint(lessThanOrEqualTo: dismiss.topAnchor, constant: -12),
                 detail.widthAnchor.constraint(equalTo: stack.widthAnchor),
+                copyStep.widthAnchor.constraint(equalTo: stack.widthAnchor),
+                openStep.widthAnchor.constraint(equalTo: stack.widthAnchor),
                 scroll.widthAnchor.constraint(equalTo: stack.widthAnchor),
-                scroll.heightAnchor.constraint(equalToConstant: 152)
+                scroll.heightAnchor.constraint(equalToConstant: previewHeight),
+                dismiss.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
+                dismiss.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -18)
             ])
         }
 
         currentReport = (name, body)
+        reportPreview = scroll
+        openGitHubButton = open
+        dismissButton = dismiss
         window = panel
+        setDefaultButton(copy)
+        panel.initialFirstResponder = copy
         panel.center()
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
@@ -142,10 +166,54 @@ final class CompatibilityReporter: NSObject, NSWindowDelegate {
         window?.close()
     }
 
-    @objc private func copyReport() {
+    private func reportStep(_ text: String, button: NSButton) -> NSStackView {
+        let label = NSTextField(labelWithString: text)
+        button.setContentHuggingPriority(.required, for: .horizontal)
+        let row = NSStackView(views: [label, button])
+        row.spacing = 12
+        return row
+    }
+
+    private func stylePreviewLink(_ button: NSButton, title: String) {
+        button.attributedTitle = NSAttributedString(string: title, attributes: [
+            .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize),
+            .foregroundColor: NSColor.linkColor,
+            .underlineStyle: NSUnderlineStyle.single.rawValue
+        ])
+    }
+
+    @objc private func togglePreview(_ sender: NSButton) {
+        guard let reportPreview, let window else { return }
+        reportPreview.isHidden.toggle()
+        stylePreviewLink(sender, title: reportPreview.isHidden ? "Show report" : "Hide report")
+        let height = reportPreview.isHidden ? collapsedHeight : collapsedHeight + previewHeight + 8
+        var frame = window.frameRect(forContentRect: CGRect(x: 0, y: 0, width: 480, height: height))
+        frame.origin = CGPoint(x: window.frame.minX, y: window.frame.maxY - frame.height)
+        window.setFrame(window.constrainFrameRect(frame, to: window.screen), display: true)
+    }
+
+    private func setDefaultButton(_ button: NSButton) {
+        if window?.defaultButtonCell?.keyEquivalent == "\r" {
+            window?.defaultButtonCell?.keyEquivalent = ""
+        }
+        button.keyEquivalent = "\r"
+        window?.defaultButtonCell = button.cell as? NSButtonCell
+    }
+
+    @objc private func copyReport(_ sender: NSButton) {
         guard let currentReport else { return }
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(currentReport.body, forType: .string)
+        guard NSPasteboard.general.setString(currentReport.body, forType: .string) else { return }
+        sender.title = "Copied ✓"
+        dismissButton?.title = "Close"
+        if let openGitHubButton {
+            setDefaultButton(openGitHubButton)
+            window?.makeFirstResponder(openGitHubButton)
+        }
+    }
+
+    @objc private func openGitHub() {
+        guard let currentReport else { return }
         var issue = URLComponents()
         issue.scheme = "https"
         issue.host = "github.com"
@@ -154,12 +222,18 @@ final class CompatibilityReporter: NSObject, NSWindowDelegate {
             URLQueryItem(name: "blank", value: "1"),
             URLQueryItem(name: "title", value: "[Compatibility]: \(currentReport.name)")
         ]
-        dismissReport()
-        if let url = issue.url { NSWorkspace.shared.open(url) }
+        if let url = issue.url, NSWorkspace.shared.open(url), let dismissButton {
+            dismissButton.title = "Done"
+            setDefaultButton(dismissButton)
+            window?.makeFirstResponder(dismissButton)
+        }
     }
 
     func windowWillClose(_ notification: Notification) {
         currentReport = nil
+        reportPreview = nil
+        openGitHubButton = nil
+        dismissButton = nil
         window = nil
         presentPending()
     }

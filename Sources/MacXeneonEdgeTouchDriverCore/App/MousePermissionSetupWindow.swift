@@ -72,15 +72,18 @@ final class MousePermissionSetupWindow: NSObject, NSWindowDelegate {
         let check = NSButton(title: "Check Again", target: self, action: #selector(checkAgain))
         let settings = NSButton(title: "Open Privacy Settings", target: self, action: #selector(openSettings))
         settings.keyEquivalent = "\r"
+        window.defaultButtonCell = settings.cell as? NSButtonCell
+        window.initialFirstResponder = settings
         let buttons = NSStackView(views: [quit, check, settings])
         buttons.spacing = 8
 
-        setContent([title, explanation, status, buttons], fullWidth: [explanation, status])
+        setContent([title, explanation, status], fullWidth: [explanation, status], buttons: buttons)
     }
 
     private func setContent(
         _ views: [NSView],
-        fullWidth: [NSView]
+        fullWidth: [NSView],
+        buttons: NSStackView
     ) {
         let content = NSView()
         window.contentView = content
@@ -89,12 +92,16 @@ final class MousePermissionSetupWindow: NSObject, NSWindowDelegate {
         stack.alignment = .leading
         stack.spacing = 12
         stack.translatesAutoresizingMaskIntoConstraints = false
+        buttons.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(stack)
+        content.addSubview(buttons)
         NSLayoutConstraint.activate([
             stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 20),
             stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
             stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
-            stack.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor, constant: -20)
+            stack.bottomAnchor.constraint(lessThanOrEqualTo: buttons.topAnchor, constant: -12),
+            buttons.trailingAnchor.constraint(equalTo: stack.trailingAnchor),
+            buttons.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -18)
         ])
         NSLayoutConstraint.activate(fullWidth.map { $0.widthAnchor.constraint(equalTo: stack.widthAnchor) })
     }
