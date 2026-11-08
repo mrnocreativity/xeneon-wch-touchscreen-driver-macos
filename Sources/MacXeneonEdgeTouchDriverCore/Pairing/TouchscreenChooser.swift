@@ -5,10 +5,9 @@ import CoreGraphics
 final class TouchscreenChooser: NSObject, NSWindowDelegate {
     private struct Row {
         let id: CGDirectDisplayID
-        let number: Int
         let checkbox: NSButton
-        let badge: NSPanel
-        let label: NSTextField
+        let overlay: NSPanel
+        let badge: DisplayNumberBadge
     }
 
     private var panel: NSPanel?
@@ -53,8 +52,8 @@ final class TouchscreenChooser: NSObject, NSWindowDelegate {
                                     target: self, action: #selector(selectionChanged))
             checkbox.isEnabled = eligible.contains(display.displayID)
             list.addArrangedSubview(checkbox)
-            let (badge, label) = makeBadge(for: screen)
-            rows.append(Row(id: display.displayID, number: number, checkbox: checkbox, badge: badge, label: label))
+            let (overlay, badge) = makeOverlay(for: screen, number: number)
+            rows.append(Row(id: display.displayID, checkbox: checkbox, overlay: overlay, badge: badge))
         }
         let scroll = NSScrollView()
         scroll.hasVerticalScroller = true
@@ -88,6 +87,7 @@ final class TouchscreenChooser: NSObject, NSWindowDelegate {
         let window = NSPanel(contentRect: CGRect(x: 0, y: 0, width: 450, height: listHeight + 155),
                              styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = "Touchscreen Setup"
+        window.level = .modalPanel
         window.isReleasedWhenClosed = false
         window.delegate = self
         guard let content = window.contentView else { hide(); return false }
@@ -102,36 +102,51 @@ final class TouchscreenChooser: NSObject, NSWindowDelegate {
         ])
         panel = window
         selectionChanged()
-        for row in rows { row.badge.orderFrontRegardless() }
-        window.center()
+        for row in rows {
+            row.overlay.orderFrontRegardless()
+            guard PairingOverlayController.displayID(for: row.overlay.screen) == row.id else {
+                hide()
+                return false
+            }
+        }
+        if let frame = NSScreen.main?.visibleFrame {
+            // Leave the center of the chooser's display clear for its number.
+            window.setFrameTopLeftPoint(NSPoint(x: frame.minX + 16, y: frame.maxY - 16))
+        } else {
+            window.center()
+        }
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
         return true
     }
 
-    private func makeBadge(for screen: NSScreen) -> (NSPanel, NSTextField) {
-        let frame = CGRect(x: screen.visibleFrame.midX - 34, y: screen.visibleFrame.maxY - 64, width: 68, height: 48)
-        let badge = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel],
-                            backing: .buffered, defer: false, screen: screen)
-        badge.level = .floating
-        badge.ignoresMouseEvents = true
-        badge.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        let label = NSTextField(labelWithString: "")
-        label.alignment = .center
-        label.font = .monospacedDigitSystemFont(ofSize: 20, weight: .semibold)
-        label.textColor = .white
-        label.frame = CGRect(x: 0, y: 10, width: 68, height: 28)
-        badge.contentView?.addSubview(label)
-        badge.setFrame(frame, display: true)
-        return (badge, label)
+    private func makeOverlay(for screen: NSScreen, number: Int) -> (NSPanel, DisplayNumberBadge) {
+        let overlay = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel],
+                              backing: .buffered, defer: false, screen: screen)
+        overlay.level = .floating
+        overlay.hasShadow = false
+        overlay.ignoresMouseEvents = true
+        overlay.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        let content = NSView()
+        let diameter = min(220, min(screen.frame.width, screen.frame.height) * 0.38)
+        let badge = DisplayNumberBadge(number: number, diameter: diameter)
+        badge.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(badge)
+        NSLayoutConstraint.activate([
+            badge.widthAnchor.constraint(equalToConstant: diameter),
+            badge.heightAnchor.constraint(equalTo: badge.widthAnchor),
+            badge.centerXAnchor.constraint(equalTo: content.centerXAnchor),
+            badge.centerYAnchor.constraint(equalTo: content.centerYAnchor)
+        ])
+        TouchscreenOverlayBackdrop.install(in: overlay, content: content)
+        overlay.setFrame(screen.frame, display: true)
+        return (overlay, badge)
     }
 
     @objc private func selectionChanged() {
         confirmButton?.isEnabled = rows.filter { $0.checkbox.state == .on }.count == requiredCount
         for row in rows {
-            let selected = row.checkbox.state == .on
-            row.badge.backgroundColor = selected ? .systemGreen : .darkGray
-            row.label.stringValue = selected ? "\(row.number) ✓" : "\(row.number)"
+            row.badge.update(selected: row.checkbox.state == .on)
         }
     }
 
@@ -154,9 +169,39 @@ final class TouchscreenChooser: NSObject, NSWindowDelegate {
         panel?.delegate = nil
         panel?.orderOut(nil)
         panel = nil
-        for row in rows { row.badge.orderOut(nil) }
+        for row in rows { row.overlay.orderOut(nil) }
         rows.removeAll()
         confirmButton = nil
         completion = nil
+    }
+}
+
+private final class DisplayNumberBadge: NSView {
+    private let label: NSTextField
+
+    init(number: Int, diameter: CGFloat) {
+        label = NSTextField(labelWithString: String(number))
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = diameter / 2
+        layer?.borderWidth = 3
+        label.font = .monospacedDigitSystemFont(ofSize: diameter * 0.53, weight: .semibold)
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
+        NSLayoutConstraint.activate([
+            label.centerXAnchor.constraint(equalTo: centerXAnchor),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor)
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func update(selected: Bool) {
+        let pink = NSColor.systemPink
+        let green = NSColor(srgbRed: 0.12, green: 0.49, blue: 0.25, alpha: 1)
+        layer?.backgroundColor = (selected ? green : .black).cgColor
+        layer?.borderColor = (selected ? green : pink).cgColor
+        label.textColor = selected ? .white : pink
     }
 }

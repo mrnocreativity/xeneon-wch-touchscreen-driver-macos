@@ -128,12 +128,10 @@ public final class PairingOverlayController: PairingOverlayPresenting {
                 screen: screen
             )
             window.level = .screenSaver
-            window.backgroundColor = NSColor(calibratedWhite: 0.035, alpha: 0.98)
-            window.isOpaque = true
             window.hasShadow = false
             window.ignoresMouseEvents = true
             window.collectionBehavior = [.fullScreenAuxiliary, .stationary]
-            window.contentView = PairingOverlayView(title: title, detail: detail, target: target)
+            TouchscreenOverlayBackdrop.install(in: window, content: PairingOverlayView(title: title, detail: detail, target: target))
             window.setFrame(expectedFrame, display: true)
 
             guard Self.displayID(for: window.screen) == display.displayID,
@@ -240,6 +238,30 @@ enum PairingOverlayGeometry {
     }
 }
 
+enum TouchscreenOverlayBackdrop {
+    static func install(in window: NSWindow, content: NSView) {
+        window.backgroundColor = .clear
+        window.isOpaque = false
+
+        let blur = NSVisualEffectView()
+        blur.appearance = NSAppearance(named: .darkAqua)
+        blur.material = .hudWindow
+        blur.blendingMode = .behindWindow
+        blur.state = .active
+        window.contentView = blur
+
+        let shade = NSView(frame: blur.bounds)
+        shade.autoresizingMask = [.width, .height]
+        shade.wantsLayer = true
+        shade.layer?.backgroundColor = NSColor(calibratedWhite: 0.12, alpha: 0.38).cgColor
+        blur.addSubview(shade)
+
+        content.frame = blur.bounds
+        content.autoresizingMask = [.width, .height]
+        blur.addSubview(content)
+    }
+}
+
 private final class PairingOverlayView: NSView {
     private let titleText: String
     private let detailText: String
@@ -250,7 +272,6 @@ private final class PairingOverlayView: NSView {
         self.detailText = detail
         self.target = target
         super.init(frame: .zero)
-        wantsLayer = true
     }
 
     @available(*, unavailable)
@@ -260,9 +281,6 @@ private final class PairingOverlayView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
-        NSColor(calibratedWhite: 0.035, alpha: 1).setFill()
-        dirtyRect.fill()
-
         let titleAttributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 34, weight: .semibold),
             .foregroundColor: NSColor.white
