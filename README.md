@@ -93,31 +93,37 @@ If the driver works for your setup, please star the repository and submit a comp
 
 ## Install with an AI Coding Agent
 
-The easiest installation path is to give this repository to a local coding
-agent such as Codex, Claude Code, Cursor, or another AI tool with filesystem and
-terminal access. Ask it to follow the repository's [AI installation
-runbook](llm.txt). The runbook gives the agent the exact installation,
-permission, physical pairing, verification, troubleshooting, and uninstall
-contract.
+Give this repository to a local coding agent such as Codex, Claude Code, Cursor,
+or another AI tool with filesystem and terminal access. The [AI installation
+runbook](llm.txt) covers both the signed portable installer and building from
+source. Both routes start with the [same hardware check](#will-this-driver-work-for-me).
 
 Copy and send this prompt to the agent:
 
-> Open this repository and follow `llm.txt` as the authoritative installation
-> runbook. Install and verify the driver on this Mac. Run the documented
-> read-only checks and installer, then explain and wait for any macOS privacy
-> approvals or physical **Touch and release the circle** steps that I must perform. Do not
-> use sudo, discard existing configuration or pairings, expose hardware
-> identifiers, change unrelated files, commit, push, or alter a pull request.
+> Open this repository and follow `llm.txt` to install and verify the driver on
+> this Mac. Run the shared preflight and use the published portable installer
+> if available. Run the Swift and script checks if building from source. Guide
+> me through any macOS privacy approvals and any **Touch and release the circle**
+> prompts. Check the driver's status, then ask me to test touch on each display.
+> Do not use sudo, discard settings or pairings, expose hardware identifiers,
+> change unrelated files, commit, push, or alter a pull request.
 
 The AI agent cannot grant Input Monitoring or Accessibility permission and
-cannot perform the physical pairing touch for you. It should pause, tell you
-exactly what is needed, and continue verification after you confirm each step.
+cannot perform the physical pairing touch for you. It should pause for those
+steps and resume verification when you confirm them. A single compatible
+display and controller can pair automatically, so you may go straight to
+testing touch.
 A browser-only chatbot without access to this Mac can explain the process but
 cannot perform the installation.
 
 ## Portable Installer
 
-The portable installer contains a signed copy of this fork's driver. On the receiving Mac, open **Install Xeneon Touch.app** and choose **Install or Update**. You can install without Xcode or Swift on that Mac. Updates keep your existing settings and saved display pairings.
+Download `MacXeneonEdgeTouchDriver-Installer-universal.zip` from the [latest
+release](https://github.com/mrnocreativity/xeneon-wch-touchscreen-driver-macos/releases/latest).
+Extract the ZIP on the Mac that will use the touchscreen, open **Install Xeneon
+Touch.app**, and choose **Install or Update**. The installer includes a signed
+driver and works without Xcode or Swift. Updates keep your existing settings
+and saved display pairings.
 
 See the [portable installer guide](docs/PORTABLE-INSTALLER.md) to build the ZIP on a development Mac.
 
