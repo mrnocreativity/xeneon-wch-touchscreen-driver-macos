@@ -118,6 +118,14 @@ CODESIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" ./Scripts/insta
 
 Without `CODESIGN_IDENTITY`, Swift's linker ad hoc signature is used. Its designated requirement changes whenever the executable changes, so macOS may require privacy approval again after an upgrade. The signing identity is supplied only through the environment and is never written into the repository, configuration, LaunchAgent, or pairing file.
 
+The driver needs permission to turn touches into mouse clicks and other mouse events. If access is missing at startup, the setup window offers **Open System Settings**, **Check Again**, and **Quit**. In **Privacy & Security**, allow the installed driver under **Device Control and Data Access** (**Accessibility** on earlier macOS), then click **Check Again**. Also grant **Input Monitoring** so the driver can read touch reports.
+
+If you quit setup, you can start the installed driver again with:
+
+```sh
+launchctl kickstart "gui/$(id -u)/com.ajvwhite.MacXeneonEdgeTouchDriver"
+```
+
 The installer creates a default config file if one does not already exist:
 
 ```text
@@ -257,7 +265,7 @@ See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for authorship, license lin
 
 ## Troubleshooting
 
-- If the driver exits immediately, check Accessibility permission for the exact binary location as provided by the install script.
+- If setup still reports missing access, verify that the privacy entry points to the exact installed binary printed by the install script, then click **Check Again**.
 - If privacy approval disappears after rebuilding, reinstall with the same `CODESIGN_IDENTITY` each time, then approve that signed binary once.
 - If HID open fails, check Input Monitoring permission and confirm no other process has seized the same VID/PID device.
 - If a panel model is not detected, run `swift run DisplayInfo` and adjust the optional display config override.

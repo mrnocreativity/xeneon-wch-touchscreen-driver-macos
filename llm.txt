@@ -230,18 +230,19 @@ Logs:
 Tell the user to open **System Settings > Privacy & Security** and grant:
 
 - **Input Monitoring**
-- **Accessibility**
+- **Device Control and Data Access** (**Accessibility** on earlier macOS)
 
 Approval should apply to the installed driver binary, or to the launching app
 if macOS attributes the request there. Use the exact installed binary path
 printed by the installer when identifying it. The agent cannot click, script,
 or bypass these approvals on the user's behalf.
 
-Wait until the user confirms both approvals. Then restart the registered agent
-so it receives the current permission state:
+The driver needs mouse-event permission to turn touches into clicks. If its
+startup setup window is open, ask the user to click **Check Again** after
+granting access. If the user quit setup, start the registered agent again:
 
 ```sh
-launchctl kickstart -k "gui/$(id -u)/com.ajvwhite.MacXeneonEdgeTouchDriver"
+launchctl kickstart "gui/$(id -u)/com.ajvwhite.MacXeneonEdgeTouchDriver"
 ```
 
 If macOS requires logout, login, or another manual confirmation, explain that

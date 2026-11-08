@@ -47,9 +47,11 @@ public final class MacXeneonEdgeTouchDriverApplication {
     private var activeGestureDevice: TouchDeviceIdentity?
     private var stuckGestureTimer: DispatchSourceTimer?
     private var signalSources: [DispatchSourceSignal] = []
+    private var permissionSetup: MousePermissionSetupWindow?
     private var didRegisterDisplayCallback = false
     private var isApplicationEventLoopRunning = false
     private var isRunning = false
+    private var exitStatus = EXIT_SUCCESS
     private var authority: [TouchDeviceIdentity: PairingAuthority] = [:]
     private var generation: UInt64 = 0
     private var challenge: PairingChallenge?
@@ -116,17 +118,30 @@ public final class MacXeneonEdgeTouchDriverApplication {
     public func run() -> Int32 {
         guard !isRunning else { return EXIT_SUCCESS }
         isRunning = true
+        exitStatus = EXIT_SUCCESS
 
         _ = NSApplication.shared
         NSApp.setActivationPolicy(.accessory)
         NSApp.finishLaunching()
         DriverLoggers.log(.notice, category: .lifecycle, "Starting independent multi-display touch driver.")
 
-        guard verifySyntheticEventPermission() else {
-            stop()
-            return EXIT_FAILURE
+        installSignalHandlers()
+        if Self.hasSyntheticEventPermission() {
+            guard startDriver() else {
+                stop()
+                return EXIT_FAILURE
+            }
+        } else {
+            showPermissionSetup()
         }
 
+        isApplicationEventLoopRunning = true
+        NSApp.run()
+        isApplicationEventLoopRunning = false
+        return exitStatus
+    }
+
+    private func startDriver() -> Bool {
         // Keep coordinate captures out of the operational log so a storm cannot
         // crowd out several days of lifecycle/pairing evidence.
         let capturePath = configuration.diagnostics.fileLogPath.flatMap { $0.isEmpty ? nil : $0 + ".storms" }
@@ -138,12 +153,8 @@ public final class MacXeneonEdgeTouchDriverApplication {
         }
 
         registerDisplayReconfigurationCallback()
-        guard didRegisterDisplayCallback else {
-            stop()
-            return EXIT_FAILURE
-        }
+        guard didRegisterDisplayCallback else { return false }
         registerScreenParametersObserver()
-        installSignalHandlers()
 
         do {
             try control.start { [weak self] command, reply in
@@ -153,22 +164,25 @@ public final class MacXeneonEdgeTouchDriverApplication {
             try hidMonitor.start()
         } catch {
             DriverLoggers.log(.fault, category: .lifecycle, "Could not start HID monitor: \(error.localizedDescription)")
-            stop()
-            return EXIT_FAILURE
+            return false
         }
 
         scheduleDisplayReconciliation(reason: "startup", delay: .milliseconds(500))
         startObservation()
 
-        isApplicationEventLoopRunning = true
-        NSApp.run()
-        isApplicationEventLoopRunning = false
-        return EXIT_SUCCESS
+        return true
     }
 
     public func stop() {
         guard isRunning else { return }
         isRunning = false
+        if let permissionSetup {
+            permissionSetup.dismiss()
+            self.permissionSetup = nil
+            signalSources.removeAll()
+            stopApplicationEventLoop()
+            return
+        }
         observationGate.stop()
         hidMonitor.stop()
         control.stop()
@@ -1192,15 +1206,36 @@ public final class MacXeneonEdgeTouchDriverApplication {
         }
     }
 
-    private func verifySyntheticEventPermission() -> Bool {
-        if CGPreflightPostEventAccess() { return true }
+    private static func hasSyntheticEventPermission() -> Bool {
+        CGPreflightPostEventAccess() || AXIsProcessTrusted()
+    }
+
+    private func showPermissionSetup() {
         logPermissionIdentity()
-        if CGRequestPostEventAccess() { return true }
-        let promptKey = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
-        let trusted = AXIsProcessTrustedWithOptions([promptKey: true] as CFDictionary)
-        if trusted || CGPreflightPostEventAccess() { return true }
-        DriverLoggers.log(.fault, category: .lifecycle, "Synthetic mouse event permission is not granted. Grant Accessibility and restart the driver.")
-        return false
+        DriverLoggers.log(.notice, category: .lifecycle, "Synthetic mouse event permission is not granted. Waiting in startup setup.")
+        let setup = MousePermissionSetupWindow(
+            checkAccess: Self.hasSyntheticEventPermission,
+            requestAccess: {
+                guard !CGRequestPostEventAccess() else { return }
+                let promptKey = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
+                _ = AXIsProcessTrustedWithOptions([promptKey: true] as CFDictionary)
+            },
+            onGranted: { [weak self] in
+                guard let self, let setup = self.permissionSetup else { return }
+                setup.dismiss()
+                self.permissionSetup = nil
+                if !self.startDriver() {
+                    self.exitStatus = EXIT_FAILURE
+                    self.stop()
+                }
+            },
+            onQuit: { [weak self] in
+                guard let self, self.permissionSetup != nil else { return }
+                self.stop()
+            }
+        )
+        permissionSetup = setup
+        setup.show()
     }
 
     private func logPermissionIdentity() {
