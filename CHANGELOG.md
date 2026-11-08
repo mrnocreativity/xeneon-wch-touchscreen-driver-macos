@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 1.2.0
+
+- Adds a universal portable installer for Apple Silicon and Intel Macs. It installs the driver without Xcode or Swift and preserves existing settings and saved pairings during upgrades. The installer is based on Alexander White's [original portable installer](https://github.com/ajvwhite/MacXeneonEdgeTouchDriver/pull/21).
+- Guides users through required mouse-event permission at startup and confirms when the driver is running in the background.
+- Automatically pairs a single compatible touchscreen with its USB controller, even when ordinary monitors are connected. Uses physical pairing when multiple compatible touchscreens need mapping.
+- Recognizes Prechen HD-123 panels that report the `12.3FHD` display identity with the default settings.
+- Documents the pre-install compatibility check and community-reported Logicom Nomad Touch support.
 - Separates responsiveness pauses from pairing invalidation: independent HID observation and AppKit probes retain verified associations through scheduling delays while blocking stale input. Adds bounded asynchronous file logging, read-only status diagnostics, and interactive LaunchAgent scheduling. Real endpoint changes and sleep/wake still require fresh ambiguous pairing.
 - Restores one central touch-and-release per display. Centralizes storm-safe calibration admission, keeps touch reports out of topology reconciliation, and waits for unresolved controllers to recover without repeatedly reopening prompts.
 - Preserves storm evidence across display-only changes and isolates each controller's gesture-cleanup timer. Earlier calibration revisions require fresh pairing through the corrected flow.
