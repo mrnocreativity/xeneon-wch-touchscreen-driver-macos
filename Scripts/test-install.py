@@ -185,6 +185,11 @@ elif command == "launchctl":
         fail("job-print", 5)
         if state.get("activation_failed"):
             fail("rollback-job-print", 5)
+        if state.get("pending_removal"):
+            state["pending_removal"] -= 1
+            if state["pending_removal"] == 0:
+                state["loaded"] = False
+            save()
         if not state["loaded"]:
             print("Could not find service", file=sys.stderr)
             sys.exit(113)
@@ -196,8 +201,17 @@ elif command == "launchctl":
         fail("bootout", 5)
         if state.get("activation_failed"):
             fail("rollback-bootout", 5)
+            if "rollback-job-vanished" in failures:
+                state["loaded"] = False
+                save()
+                fail("rollback-job-vanished", 3)
         if not state["loaded"]:
             reject("bootout attempted for an absent test job")
+        if "delayed-bootout" in failures:
+            state["pending_removal"] = 3
+            save()
+            record(injection="delayed-bootout")
+            sys.exit(0)
         state["loaded"] = False
         save()
         fail("bootout-partial", 5)
@@ -206,6 +220,8 @@ elif command == "launchctl":
         plist = inside(args[2])
         if plist != Path(paths["plist"]):
             reject("unexpected bootstrap plist")
+        if state["loaded"]:
+            reject("bootstrap attempted before the previous registration cleared")
         state["bootstrap_count"] += 1
         if state["bootstrap_count"] == 1 and ("bootstrap" in failures or "bootstrap-partial" in failures):
             state["activation_failed"] = True
@@ -227,6 +243,10 @@ elif command == "id":
     if args != ["-u"]:
         reject("unexpected id invocation")
     print("501")
+    sys.exit(0)
+elif command == "sleep":
+    if args != ["0.2"]:
+        reject("unexpected retry interval")
     sys.exit(0)
 
 utilities = {
@@ -350,7 +370,7 @@ class InstallerTests(unittest.TestCase):
         self.command_log = self.case / "commands.jsonl"
         self.stub_bin = self.case / "stub-bin"
         self.stub_bin.mkdir()
-        for name in ["swift", "codesign", "launchctl", "id", "cat", "chmod", "cmp", "cp", "dirname", "install", "mkdir", "mktemp", "mv", "rm", "rmdir", "touch", "plutil"]:
+        for name in ["swift", "codesign", "launchctl", "id", "cat", "chmod", "cmp", "cp", "dirname", "install", "mkdir", "mktemp", "mv", "rm", "rmdir", "sleep", "touch", "plutil"]:
             stub = self.stub_bin / name
             stub.write_text(STUB_SOURCE)
             stub.chmod(0o755)
@@ -649,6 +669,12 @@ class InstallerTests(unittest.TestCase):
         self.assertTrue(self.state["loaded"])
         self.assertEqual(self.state["bootstrap_count"], 0)
 
+    def test_upgrade_waits_for_launchd_to_remove_previous_registration(self):
+        self.prepare()
+        self.assertEqual(self.run_installer(["delayed-bootout"]), 0, self.output)
+        self.assert_new_installation()
+        self.assertEqual(sum(call["command"] == "sleep" for call in self.calls), 2)
+
     def test_bootout_failure_after_unloading_restores_previous_job(self):
         self.prepare()
         self.assertNotEqual(self.run_installer(["bootout-partial"]), 0, self.output)
@@ -707,6 +733,14 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(self.state["bootout_count"], 2)
         self.assertTrue(self.state["loaded"], self.output)
         self.assertEqual(self.state["active_binary"], OLD_BINARY.decode())
+
+    def test_rollback_restores_previous_job_when_replacement_vanishes(self):
+        self.prepare()
+        self.assertNotEqual(self.run_installer(["bootstrap-partial", "rollback-job-vanished"]), 0, self.output)
+        self.assert_unchanged()
+        self.assertTrue(self.state["loaded"])
+        self.assertEqual(self.state["active_binary"], OLD_BINARY.decode())
+        self.assertNotIn("Rollback incomplete", self.output)
 
     def test_failed_rollback_bootstrap_reports_failure(self):
         self.prepare()

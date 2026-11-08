@@ -91,6 +91,25 @@ job_state() {
   fi
 }
 
+# bootout can return before launchd removes the service from its domain.
+wait_for_job_absence() {
+  remaining_checks=50
+  while :; do
+    job_state || {
+      if [ "$?" -eq 1 ]; then
+        return 0
+      fi
+      return 1
+    }
+    if [ "$remaining_checks" -eq 0 ]; then
+      printf 'Timed out waiting for launchd to remove the LaunchAgent.\n' >&2
+      return 1
+    fi
+    remaining_checks=$((remaining_checks - 1))
+    sleep 0.2
+  done
+}
+
 restore_file() {
   target=$1
   previous=$2
@@ -109,7 +128,11 @@ rollback() {
     # A failed bootstrap can still have registered a service. Stop it before
     # restoring files so KeepAlive cannot restart it during recovery.
     if job_state; then
-      if ! launchctl bootout "$service"; then
+      # The job may disappear between print and bootout. Confirm absence
+      # before restoring files, regardless of bootout's result.
+      launchctl bootout "$service" > "$stage_dir/rollback-bootout.txt" 2>&1 || :
+      if ! wait_for_job_absence; then
+        cat "$stage_dir/rollback-bootout.txt" >&2
         printf 'Rollback incomplete: could not unload the replacement job; files were not restored.\n' >&2
         return 1
       fi
@@ -296,6 +319,7 @@ printf 'binary=%s\nplist=%s\nconfig=%s\njob_registered=%s\n' "$had_binary" "$had
 rollback_needed=1
 if [ "$old_loaded" -eq 1 ]; then
   launchctl bootout "$service"
+  wait_for_job_absence
 fi
 binary_changed=1
 mv -f "$bin_stage/next-binary" "$installed_binary"
