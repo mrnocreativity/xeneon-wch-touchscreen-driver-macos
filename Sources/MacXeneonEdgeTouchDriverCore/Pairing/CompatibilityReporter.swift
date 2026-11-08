@@ -125,7 +125,8 @@ final class CompatibilityReporter: NSObject, NSWindowDelegate {
         let copyStep = reportStep("1. Copy the compatibility report.", button: copy)
         let openStep = reportStep("2. Open a new GitHub issue.", button: open)
         let pasteStep = NSTextField(wrappingLabelWithString: "3. Paste the report into the issue description.")
-        let submitStep = NSTextField(wrappingLabelWithString: "4. Review the issue, then click Submit new issue.")
+        let submitStep = NSTextField(wrappingLabelWithString:
+            "4. If you have a link to your exact touchscreen model, add it (for example, its Amazon listing). Then click Submit new issue.")
         let stack = NSStackView(views: [heading, detail, copyStep, previewLink, scroll, openStep, pasteStep, submitStep])
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -143,6 +144,7 @@ final class CompatibilityReporter: NSObject, NSWindowDelegate {
                 detail.widthAnchor.constraint(equalTo: stack.widthAnchor),
                 copyStep.widthAnchor.constraint(equalTo: stack.widthAnchor),
                 openStep.widthAnchor.constraint(equalTo: stack.widthAnchor),
+                submitStep.widthAnchor.constraint(equalTo: stack.widthAnchor),
                 scroll.widthAnchor.constraint(equalTo: stack.widthAnchor),
                 scroll.heightAnchor.constraint(equalToConstant: previewHeight),
                 dismiss.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
