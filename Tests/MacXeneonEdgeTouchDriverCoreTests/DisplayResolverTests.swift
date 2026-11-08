@@ -65,6 +65,36 @@ final class DisplayResolverTests: XCTestCase {
         XCTAssertEqual(resolver.matchingDisplays(from: [right, left]).map(\.runtimeIdentifier), ["LEFT", "RIGHT"])
     }
 
+    func testDefaultMatchingIncludesPrechenPanelsInDifferentDisplayModes() {
+        let samsung = DisplaySnapshot(
+            displayID: 1, vendorNumber: 19501, modelNumber: 3996, serialNumber: 0,
+            bounds: .zero, pixelsWide: 5120, pixelsHigh: 1440
+        )
+        let prechen = DisplaySnapshot(
+            displayID: 2, vendorNumber: 7745, modelNumber: 21579, serialNumber: 0,
+            bounds: CGRect(x: 1280, y: 0, width: 1280, height: 480), pixelsWide: 1280, pixelsHigh: 480
+        )
+        let secondPrechen = DisplaySnapshot(
+            displayID: 3, vendorNumber: 7745, modelNumber: 21579, serialNumber: 0,
+            bounds: .zero, pixelsWide: 1920, pixelsHigh: 720
+        )
+        let corsair = matchingDisplay(id: 4, runtimeIdentifier: "CORSAIR", x: 2560)
+        let resolver = DisplayResolver()
+
+        XCTAssertEqual(resolver.matchingDisplays(from: [samsung, prechen]), [prechen])
+        XCTAssertEqual(resolver.matchingDisplays(from: [prechen, corsair, samsung, secondPrechen]), [
+            secondPrechen, prechen, corsair
+        ])
+
+        var custom = DriverConfiguration.defaults.display
+        custom.vendorNumber = samsung.vendorNumber
+        custom.modelNumber = samsung.modelNumber
+        XCTAssertEqual(
+            DisplayResolver(configuration: custom).matchingDisplays(from: [prechen, corsair, samsung]),
+            [samsung]
+        )
+    }
+
     private func matchingDisplay(id: CGDirectDisplayID, runtimeIdentifier: String, x: CGFloat) -> DisplaySnapshot {
         DisplaySnapshot(
             displayID: id,

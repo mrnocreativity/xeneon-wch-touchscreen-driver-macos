@@ -121,6 +121,23 @@ public final class DisplayResolver {
 
     /// Returns all compatible displays from supplied snapshots.
     public func matchingDisplays(from displays: [DisplaySnapshot]) -> [DisplaySnapshot] {
+        var matches = configuredMatches(from: displays)
+        // Older installers wrote the default Corsair values to config.json.
+        // Treat those values as defaults so existing installs gain built-in profiles too.
+        if configuration == DriverConfiguration.defaults.display {
+            // Prechen HD-123 panels report this EDID identity across display modes.
+            matches += displays.filter { $0.vendorNumber == 7745 && $0.modelNumber == 21579 }
+        }
+
+        return matches.sorted { lhs, rhs in
+            if lhs.bounds.origin.x != rhs.bounds.origin.x {
+                return lhs.bounds.origin.x < rhs.bounds.origin.x
+            }
+            return lhs.bounds.origin.y < rhs.bounds.origin.y
+        }
+    }
+
+    private func configuredMatches(from displays: [DisplaySnapshot]) -> [DisplaySnapshot] {
         let vendorModelMatches = displays.filter { display in
             display.vendorNumber == configuration.vendorNumber &&
             display.modelNumber == configuration.modelNumber
@@ -138,16 +155,9 @@ public final class DisplayResolver {
             display.pixelsHigh == configuration.expectedHeight
         }
 
-        let matches = sizeMatches.isEmpty
+        return sizeMatches.isEmpty
             ? (serialMatches.isEmpty ? vendorModelMatches : serialMatches)
             : sizeMatches
-
-        return matches.sorted { lhs, rhs in
-            if lhs.bounds.origin.x != rhs.bounds.origin.x {
-                return lhs.bounds.origin.x < rhs.bounds.origin.x
-            }
-            return lhs.bounds.origin.y < rhs.bounds.origin.y
-        }
     }
 
     /// Returns live snapshots for every active CoreGraphics display.
