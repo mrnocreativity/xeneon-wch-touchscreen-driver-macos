@@ -31,6 +31,49 @@ Last updated November 8, 2026. The table includes physically verified hardware, 
 | [Logicom Nomad Touch 15.6-inch Portable Touch Screen](https://www.logicom-europe.com/fr/ecrans-portables/941-nomad-touch.html) | 1920x1080 IPS touchscreen with USB-C and mini HDMI. Touch controller USB ID is unconfirmed. | Community-reported working in [issue #1](https://github.com/mrnocreativity/xeneon-wch-touchscreen-driver-macos/issues/1). |
 | Other displays reporting `wch.cn TouchScreen` USB `27C0:0859` | Often marketed as portable touchscreens, secondary monitors, stretched-bar displays, sensor panels, or AIDA64 monitors | Compatibility candidate. A matching controller ID is a strong signal, but display descriptors, report formats, and firmware can still differ. Please report successful or unsuccessful results. |
 
+## Will this driver work for me?
+
+Connect the touchscreen to your Mac with a USB data cable, including when you use HDMI for the picture. Disconnect any other external touchscreens so the result is for the one you’re checking. Open **Terminal**, copy and paste the entire block below, and press **Return**. The check uses built-in macOS tools and runs before installation.
+
+```bash
+/bin/bash <<'CHECK_TOUCHSCREEN'
+if ! macos=$(/usr/bin/sw_vers -productVersion); then
+  echo "Could not check the macOS version."
+  exit 2
+fi
+
+if [[ ${macos%%.*} -lt 13 ]]; then
+  echo "No — this driver requires macOS 13 or later. This Mac runs $macos."
+  exit 1
+fi
+
+# USB 27C0:0859 (decimal 10176:2137), HID Generic Desktop / Mouse (1:2).
+if ! devices=$(/usr/bin/hidutil list --matching \
+    '{"VendorID":10176,"ProductID":2137,"DeviceUsagePage":1,"DeviceUsage":2}'); then
+  echo "Could not check for the touchscreen."
+  exit 2
+fi
+
+if /usr/bin/awk '
+  /^Devices:/ { in_devices = 1; next }
+  /^Services:/ { in_devices = 0 }
+  in_devices && tolower($1) ~ /^0x0*27c0$/ && tolower($2) ~ /^0x0*859$/ {
+    found = 1
+  }
+  END { exit !found }
+' <<< "$devices"; then
+  echo "Yes — this driver should work with your connected touchscreen."
+else
+  echo "No — this driver could not find a compatible touchscreen."
+  exit 1
+fi
+CHECK_TOUCHSCREEN
+```
+
+A **Yes** means your Mac meets the version requirement and sees the USB touch interface the driver looks for. Pairing and touch behavior can be verified after installation. If you get **No** on macOS 13 or later, check that the touchscreen’s USB data port is connected to the Mac and run the check again.
+
+You can also look up your model in the [compatibility table above](#known-compatibility). If you run the check on a model that isn’t listed, please [report your model and result](#report-another-compatible-display).
+
 ## Report Another Compatible Display
 
 If your display uses this controller, [open a compatibility report](https://github.com/mrnocreativity/xeneon-wch-touchscreen-driver-macos/issues/new?template=compatibility-report.yml). Reports of both working and non-working models help define the real compatibility boundary. Exact brand names and retail listing titles also help other owners find this project when the same hardware is sold under another name.
