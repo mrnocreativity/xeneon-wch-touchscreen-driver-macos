@@ -335,7 +335,10 @@ private final class DisplayNumberBadge: NSButton {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     func update(selected: Bool) {
-        if let layer { TouchscreenTargetStyle.apply(to: layer, selected: selected) }
+        if let layer {
+            let green = NSColor(srgbRed: 0, green: 0.67, blue: 0.22, alpha: 1)
+            TouchscreenTargetStyle.apply(to: layer, edge: selected ? green : .white, fill: selected ? green : .black)
+        }
         setAccessibilityValue(selected ? "Selected" : "Unselected")
     }
 }

@@ -269,10 +269,8 @@ enum TouchscreenOverlayBackdrop {
 }
 
 enum TouchscreenTargetStyle {
-    static func apply(to layer: CALayer, selected: Bool) {
-        let green = NSColor(srgbRed: 0, green: 0.67, blue: 0.22, alpha: 1)
-        let edge = selected ? green : .white
-        layer.backgroundColor = (selected ? green : .black).cgColor
+    static func apply(to layer: CALayer, edge: NSColor, fill: NSColor?) {
+        layer.backgroundColor = fill?.cgColor
         layer.borderColor = edge.cgColor
         layer.borderWidth = 3
         layer.shadowColor = edge.cgColor
@@ -331,7 +329,11 @@ private final class PairingOverlayView: NSView {
         )
         if let layer = circle.layer {
             layer.cornerRadius = radius
-            TouchscreenTargetStyle.apply(to: layer, selected: false)
+            TouchscreenTargetStyle.apply(to: layer, edge: .white, fill: nil)
+            let inset = layer.borderWidth / 2
+            let outline = CGPath(ellipseIn: layer.bounds.insetBy(dx: inset, dy: inset), transform: nil)
+            layer.shadowPath = outline.copy(strokingWithWidth: layer.borderWidth, lineCap: .butt,
+                                            lineJoin: .round, miterLimit: 0)
         }
     }
 
