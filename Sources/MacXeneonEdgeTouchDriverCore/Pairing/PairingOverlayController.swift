@@ -35,7 +35,7 @@ public final class PairingOverlayController: PairingOverlayPresenting {
     public func show(on display: DisplaySnapshot, step: Int, total: Int) -> Bool {
         present(
             on: display,
-            title: "Touch and release the circle",
+            title: "Tap the circle",
             detail: "Display \(step) of \(total)",
             target: PairingChallenge.target
         )
@@ -329,7 +329,7 @@ private final class PairingOverlayView: NSView {
         )
         if let layer = circle.layer {
             layer.cornerRadius = radius
-            TouchscreenTargetStyle.apply(to: layer, edge: .white, fill: nil)
+            TouchscreenTargetStyle.apply(to: layer, edge: .systemIndigo, fill: nil)
             let inset = layer.borderWidth / 2
             let outline = CGPath(ellipseIn: layer.bounds.insetBy(dx: inset, dy: inset), transform: nil)
             layer.shadowPath = outline.copy(strokingWithWidth: layer.borderWidth, lineCap: .butt,

@@ -255,6 +255,8 @@ func showCompletion() {
     message.alignment = .center
     let done = NSButton(title: "Done", target: installerDelegate, action: #selector(InstallerDelegate.dismissCompletion))
     done.keyEquivalent = "\r"
+    window.defaultButtonCell = done.cell as? NSButtonCell
+    window.initialFirstResponder = done
     let stack = NSStackView(views: [checkmark, title, message, done])
     stack.orientation = .vertical
     stack.alignment = .centerX

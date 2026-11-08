@@ -5,7 +5,7 @@ import CoreGraphics
 final class TouchscreenChooser: NSObject, NSWindowDelegate {
     private struct Row {
         let id: CGDirectDisplayID
-        let checkbox: NSButton
+        let choice: DisplayChoiceRow
         let overlay: NSPanel
         let badgeWindow: NSPanel
         let badge: DisplayNumberBadge
@@ -43,8 +43,9 @@ final class TouchscreenChooser: NSObject, NSWindowDelegate {
         requiredCount = count
 
         let frame = mainScreen.visibleFrame
-        let maxVisibleRows = max(1, min(7, Int((frame.height - 310) / 28)))
-        let listHeight = CGFloat(min(max(visible.count, 1), maxVisibleRows) * 28 + 8)
+        let rowPitch = 46
+        let maxVisibleRows = max(1, min(7, Int((frame.height - 310) / CGFloat(rowPitch))))
+        let listHeight = CGFloat(min(max(visible.count, 1), maxVisibleRows) * rowPitch + 2)
         let window = NSPanel(contentRect: CGRect(x: 0, y: 0, width: 450, height: listHeight + 155),
                              styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.setFrameOrigin(CGPoint(x: frame.midX - window.frame.width / 2, y: frame.midY - window.frame.height / 2))
@@ -57,26 +58,33 @@ final class TouchscreenChooser: NSObject, NSWindowDelegate {
         let list = NSStackView()
         list.orientation = .vertical
         list.alignment = .leading
-        list.spacing = 7
+        list.spacing = 6
         list.translatesAutoresizingMaskIntoConstraints = false
         for (index, entry) in visible.enumerated() {
             let (display, screen) = entry
             let number = index + 1
-            let checkbox = NSButton(checkboxWithTitle: "\(number). \(screen.localizedName)",
-                                    target: self, action: #selector(selectionChanged))
-            checkbox.isEnabled = eligible.contains(display.displayID)
-            list.addArrangedSubview(checkbox)
+            let choice = DisplayChoiceRow(number: number, name: screen.localizedName,
+                                          available: eligible.contains(display.displayID))
+            choice.target = self
+            choice.action = #selector(selectionChanged)
+            choice.translatesAutoresizingMaskIntoConstraints = false
+            list.addArrangedSubview(choice)
+            NSLayoutConstraint.activate([
+                choice.widthAnchor.constraint(equalTo: list.widthAnchor),
+                choice.heightAnchor.constraint(equalToConstant: 40)
+            ])
             let (overlay, badgeWindow, badge) = makeOverlay(
-                for: screen, number: number, enabled: checkbox.isEnabled,
+                for: screen, number: number, enabled: choice.isEnabled,
                 chooserFrame: display.displayID == mainDisplayID ? window.frame : nil
             )
-            rows.append(Row(id: display.displayID, checkbox: checkbox, overlay: overlay,
+            rows.append(Row(id: display.displayID, choice: choice, overlay: overlay,
                             badgeWindow: badgeWindow, badge: badge))
         }
         let scroll = NSScrollView()
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
-        let document = NSView()
+        scroll.drawsBackground = false
+        let document = DisplayListView()
         document.addSubview(list)
         scroll.documentView = document
         document.translatesAutoresizingMaskIntoConstraints = false
@@ -85,18 +93,15 @@ final class TouchscreenChooser: NSObject, NSWindowDelegate {
             document.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
             document.topAnchor.constraint(equalTo: scroll.contentView.topAnchor),
             list.leadingAnchor.constraint(equalTo: document.leadingAnchor, constant: 3),
-            list.trailingAnchor.constraint(lessThanOrEqualTo: document.trailingAnchor),
+            list.trailingAnchor.constraint(equalTo: document.trailingAnchor, constant: -3),
             list.topAnchor.constraint(equalTo: document.topAnchor, constant: 4),
             list.bottomAnchor.constraint(equalTo: document.bottomAnchor, constant: -4)
         ])
-        let cancel = NSButton(title: "Cancel", target: self, action: #selector(cancelSelection))
-        cancel.keyEquivalent = "\u{1b}"
         let confirm = NSButton(title: "Continue", target: self, action: #selector(acceptSelection))
-        confirm.keyEquivalent = "\r"
         confirmButton = confirm
-        let buttons = NSStackView(views: [cancel, confirm])
-        buttons.spacing = 10
-        let stack = NSStackView(views: [heading, instruction, scroll, buttons])
+        let buttons = actionButtons(in: window, primary: confirm)
+        window.initialFirstResponder = rows.first(where: { $0.choice.isEnabled })?.choice
+        let stack = NSStackView(views: [heading, instruction, scroll])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 12
@@ -109,13 +114,16 @@ final class TouchscreenChooser: NSObject, NSWindowDelegate {
         window.delegate = self
         guard let content = window.contentView else { hide(); return false }
         content.addSubview(stack)
+        content.addSubview(buttons)
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
             stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
             stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 18),
             instruction.widthAnchor.constraint(equalTo: stack.widthAnchor),
             scroll.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            scroll.heightAnchor.constraint(equalToConstant: listHeight)
+            scroll.heightAnchor.constraint(equalToConstant: listHeight),
+            buttons.trailingAnchor.constraint(equalTo: stack.trailingAnchor),
+            buttons.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -18)
         ])
         panel = window
         selectionChanged()
@@ -154,30 +162,41 @@ final class TouchscreenChooser: NSObject, NSWindowDelegate {
         let introHeading = NSTextField(labelWithString: title)
         introHeading.font = .boldSystemFont(ofSize: 17)
         let detail = NSTextField(wrappingLabelWithString: message)
-        let introCancel = NSButton(title: "Cancel", target: self, action: #selector(cancelSelection))
-        introCancel.keyEquivalent = "\u{1b}"
         let next = NSButton(title: "Next", target: self, action: nextAction)
-        next.keyEquivalent = "\r"
-        let introButtons = NSStackView(views: [introCancel, next])
-        introButtons.spacing = 10
-        let introStack = NSStackView(views: [introHeading, detail, introButtons])
+        let buttons = actionButtons(in: intro, primary: next)
+        intro.initialFirstResponder = next
+        let introStack = NSStackView(views: [introHeading, detail])
         introStack.orientation = .vertical
         introStack.alignment = .leading
         introStack.spacing = 12
         introStack.translatesAutoresizingMaskIntoConstraints = false
         guard let introContent = intro.contentView else { hide(); return false }
         introContent.addSubview(introStack)
+        introContent.addSubview(buttons)
         NSLayoutConstraint.activate([
             introStack.leadingAnchor.constraint(equalTo: introContent.leadingAnchor, constant: 20),
             introStack.trailingAnchor.constraint(equalTo: introContent.trailingAnchor, constant: -20),
             introStack.topAnchor.constraint(equalTo: introContent.topAnchor, constant: 18),
-            detail.widthAnchor.constraint(equalTo: introStack.widthAnchor)
+            detail.widthAnchor.constraint(equalTo: introStack.widthAnchor),
+            buttons.trailingAnchor.constraint(equalTo: introStack.trailingAnchor),
+            buttons.bottomAnchor.constraint(equalTo: introContent.bottomAnchor, constant: -18)
         ])
         introduction = intro
         NSApp.activate(ignoringOtherApps: true)
         intro.makeKeyAndOrderFront(nil)
         guard intro.isVisible else { hide(); return false }
         return true
+    }
+
+    private func actionButtons(in window: NSWindow, primary: NSButton) -> NSStackView {
+        let cancel = NSButton(title: "Cancel", target: self, action: #selector(cancelSelection))
+        cancel.keyEquivalent = "\u{1b}"
+        primary.keyEquivalent = "\r"
+        window.defaultButtonCell = primary.cell as? NSButtonCell
+        let buttons = NSStackView(views: [cancel, primary])
+        buttons.spacing = 8
+        buttons.translatesAutoresizingMaskIntoConstraints = false
+        return buttons
     }
 
     @objc private func showDisplays() {
@@ -258,20 +277,21 @@ final class TouchscreenChooser: NSObject, NSWindowDelegate {
     }
 
     @objc private func toggleDisplay(_ sender: DisplayNumberBadge) {
-        guard let row = rows.first(where: { $0.badge === sender }), row.checkbox.isEnabled else { return }
-        row.checkbox.state = row.checkbox.state == .on ? .off : .on
+        guard let row = rows.first(where: { $0.badge === sender }), row.choice.isEnabled else { return }
+        row.choice.state = row.choice.state == .on ? .off : .on
         selectionChanged()
     }
 
     @objc private func selectionChanged() {
-        confirmButton?.isEnabled = rows.filter { $0.checkbox.state == .on }.count == requiredCount
+        confirmButton?.isEnabled = rows.filter { $0.choice.state == .on }.count == requiredCount
         for row in rows {
-            row.badge.update(selected: row.checkbox.state == .on)
+            row.choice.updateAppearance()
+            row.badge.update(selected: row.choice.state == .on)
         }
     }
 
     @objc private func acceptSelection() {
-        let selection = Set(rows.filter { $0.checkbox.state == .on }.map(\.id))
+        let selection = Set(rows.filter { $0.choice.state == .on }.map(\.id))
         guard selection.count == requiredCount else { return }
         finish(selection)
     }
@@ -311,6 +331,73 @@ final class TouchscreenChooser: NSObject, NSWindowDelegate {
         confirmButton = nil
         completion = nil
         verificationCompletion = nil
+    }
+}
+
+private final class DisplayListView: NSView {
+    override var isFlipped: Bool { true }
+}
+
+private final class DisplayChoiceRow: NSButton {
+    private let numberLabel: NSTextField
+    private let nameLabel: NSTextField
+    private let statusLabel = NSTextField(labelWithString: "")
+
+    init(number: Int, name: String, available: Bool) {
+        numberLabel = NSTextField(labelWithString: String(number))
+        nameLabel = NSTextField(labelWithString: name)
+        super.init(frame: .zero)
+        title = ""
+        isBordered = false
+        setButtonType(.pushOnPushOff)
+        isEnabled = available
+        setAccessibilityLabel("Display \(number), \(name)")
+        wantsLayer = true
+        layer?.cornerRadius = 8
+        layer?.borderWidth = 1
+        numberLabel.font = .monospacedDigitSystemFont(ofSize: 13, weight: .semibold)
+        numberLabel.alignment = .center
+        nameLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        nameLabel.lineBreakMode = .byTruncatingTail
+        statusLabel.font = .systemFont(ofSize: 12, weight: .medium)
+        statusLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+        let labels = NSStackView(views: [numberLabel, nameLabel, statusLabel])
+        labels.spacing = 8
+        labels.alignment = .centerY
+        labels.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(labels)
+        NSLayoutConstraint.activate([
+            labels.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            labels.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            labels.centerYAnchor.constraint(equalTo: centerYAnchor),
+            numberLabel.widthAnchor.constraint(equalToConstant: 26)
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        super.hitTest(point) == nil ? nil : self
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateAppearance()
+    }
+
+    func updateAppearance() {
+        let selected = state == .on
+        let accent = NSColor.controlAccentColor
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = (selected ? accent.withAlphaComponent(0.14) : .controlBackgroundColor).cgColor
+            layer?.borderColor = (selected ? accent : .separatorColor).cgColor
+        }
+        numberLabel.textColor = selected ? accent : .secondaryLabelColor
+        nameLabel.textColor = isEnabled ? .labelColor : .secondaryLabelColor
+        statusLabel.textColor = .secondaryLabelColor
+        statusLabel.stringValue = isEnabled ? (selected ? "Selected" : "") : "Already assigned"
+        setAccessibilityValue(isEnabled ? (selected ? "Selected" : "Unselected") : "Already assigned")
     }
 }
 
