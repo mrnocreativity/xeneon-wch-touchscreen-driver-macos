@@ -198,9 +198,11 @@ All fields are optional. Missing or malformed config falls back to defaults and 
 
 `gesture.multiTouchEnabled` is always forced to `false` as the hardware only exposes single touch information, if this ever changes we will look to see how to support multi-touch gestures.
 
-## Pairing Multiple Displays
+## Pairing Touchscreens
 
-When a controller has no verified assignment, the driver covers one compatible display with **Touch and release the circle**. Touch and release the central circle once, then repeat when the prompt moves to the next display. The physical contact must begin after the target appears, stay near it, and complete within two seconds. Calibration does not generate mouse clicks. Verified associations are saved atomically in:
+With one compatible touchscreen and one supported USB touch controller, the driver assigns them automatically after the connection stabilizes. Other monitors do not count toward that decision. The automatic assignment is recalculated when hardware changes. Connecting another matching screen and controller may require physical pairing.
+
+When physical pairing is needed, the driver covers one compatible display with **Touch and release the circle**. Touch and release the central circle once, then repeat when the prompt moves to the next display. The physical contact must begin after the target appears, stay near it, and complete within two seconds. Calibration does not generate mouse clicks. Verified associations are saved atomically in:
 
 ```text
 ~/Library/Application Support/MacXeneonEdgeTouchDriver/pairings.json

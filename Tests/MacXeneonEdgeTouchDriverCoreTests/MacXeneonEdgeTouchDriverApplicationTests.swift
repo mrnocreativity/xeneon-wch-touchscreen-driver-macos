@@ -3,6 +3,52 @@ import CoreGraphics
 import XCTest
 
 final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
+    func testUniqueTouchscreenPairsAutomaticallyUntilSecondTouchscreenArrives() throws {
+        let monitor = DisplaySnapshot(displayID: 10, vendorNumber: 0, modelNumber: 0, serialNumber: 0,
+            bounds: CGRect(x: 0, y: 0, width: 1920, height: 1080), pixelsWide: 1920, pixelsHigh: 1080)
+        let first = display(id: 41, runtimeIdentifier: "FIRST", x: 2_000)
+        let second = display(id: 42, runtimeIdentifier: "SECOND", x: 5_000)
+        let controller = TouchDeviceIdentity(locationID: 1)
+        var displays = [monitor]
+        let store = pairingStore()
+        let overlay = ApplicationRecordingPairingOverlay()
+        let input = ApplicationRecordingInputSink()
+        let app = MacXeneonEdgeTouchDriverApplication(automaticallyScheduleConfidence: false,
+            configuration: immediateConfiguration(), displayResolver: DisplayResolver(activeDisplayProvider: { displays }),
+            inputSink: input, cursorController: ApplicationRecordingCursorController(), pairingStore: store,
+            pairingOverlay: overlay, requiredStablePairingTopologyObservations: 2)
+
+        app.refreshDisplayMappings(reason: "ordinary monitor only")
+        XCTAssertTrue(try statusRecords(app).isEmpty)
+        app.handleDeviceMatched(controller)
+        app.refreshDisplayMappings(reason: "controller appears before its display")
+        XCTAssertEqual(try statusRecords(app).first?["state"] as? String, "waitingForHardware")
+        displays.append(first)
+        app.refreshDisplayMappings(reason: "first unique observation")
+        XCTAssertNil(try statusRecords(app).first?["displayID"])
+        app.refreshDisplayMappings(reason: "stable unique observation")
+        XCTAssertEqual(try statusRecords(app).first?["displayID"] as? UInt32, first.displayID)
+        XCTAssertFalse(overlay.calls.contains(.show("FIRST", 1, 1)))
+        XCTAssertTrue(store.pairings.isEmpty)
+        app.handleTouchEvent(deviceEvent(controller, .move, rawX: 0, rawY: 0))
+        app.handleTouchEvent(deviceEvent(controller, .up, rawX: 0, rawY: 0))
+        XCTAssertTrue(input.calls.isEmpty, "A contact held before automatic pairing must not click")
+        app.handleTouchEvent(deviceEvent(controller, .down, rawX: 0, rawY: 0))
+        app.handleTouchEvent(deviceEvent(controller, .up, rawX: 0, rawY: 0))
+        XCTAssertEqual(input.calls, [.mouseDown(first.bounds.origin), .mouseUp(first.bounds.origin)])
+
+        displays.append(second)
+        app.refreshDisplayMappings(reason: "second display appears before its controller")
+        XCTAssertNil(try statusRecords(app).first?["displayID"])
+        XCTAssertFalse(overlay.calls.contains(.show("FIRST", 1, 2)))
+        app.handleDeviceMatched(TouchDeviceIdentity(locationID: 2))
+        app.refreshDisplayMappings(reason: "both controllers and displays present")
+        app.refreshDisplayMappings(reason: "stable dual observation")
+        XCTAssertTrue(overlay.calls.contains(.show("FIRST", 1, 2)))
+        XCTAssertEqual(try statusRecords(app).compactMap { $0["state"] as? String }, ["calibrating", "calibrating"])
+        XCTAssertTrue(store.pairings.isEmpty)
+    }
+
     func testHeldFingerCannotBecomeDelayedClickAfterResponsivenessRecovery() throws {
         let target = display(id: 41, runtimeIdentifier: "LEFT", x: 0)
         let device = TouchDeviceIdentity(locationID: 1)
@@ -53,7 +99,8 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
         target = display(id: 41, runtimeIdentifier: "REPLACEMENT", x: 0)
         app.handleObservationReceipt(displays: [target])
         XCTAssertTrue(store.pairings.isEmpty)
-        XCTAssertFalse(try statusRecords(app).contains { $0["state"] as? String == "active" })
+        XCTAssertEqual(try statusRecords(app).first?["reason"] as? String,
+            "Automatically paired the only compatible display and controller")
     }
 
     func testInProgressCalibrationContactCannotSurvivePause() {
@@ -62,6 +109,7 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
         let store = pairingStore()
         let app = recoveryApplication(store: store, displays: { [target] })
         app.handleDeviceMatched(device)
+        _ = app.handleControlCommand("re-pair")
         app.refreshDisplayMappings(reason: "test pressed calibration")
         let start = DispatchTime.now().uptimeNanoseconds + 1_000_000
         app.handleTouchEvent(deviceEvent(device, .down, rawX: 8_192, rawY: 4_800, timestampNanoseconds: start))
@@ -111,6 +159,7 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
         let overlay = ApplicationRecordingPairingOverlay()
         let app = recoveryApplication(store: pairingStore(), overlay: overlay, observationClock: { now }, displays: { [target] })
         app.handleDeviceMatched(TouchDeviceIdentity(locationID: 1))
+        _ = app.handleControlCommand("re-pair")
         app.refreshDisplayMappings(reason: "test untouched prompt")
         let calls = overlay.calls
         app.observationGate.start()
@@ -159,6 +208,7 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
         let input = ApplicationRecordingInputSink()
         let app = recoveryApplication(store: store, input: input, displays: { [target] })
         app.handleDeviceMatched(device)
+        _ = app.handleControlCommand("re-pair")
         app.refreshDisplayMappings(reason: "test queued contact")
         let old = DispatchTime.now().uptimeNanoseconds - 1_000_000_000
         app.pauseForResponsiveness()
@@ -206,6 +256,7 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
         let input = ApplicationRecordingInputSink()
         let app = recoveryApplication(store: store, input: input, overlay: overlay, displays: { [target] })
         app.handleDeviceMatched(device)
+        _ = app.handleControlCommand("re-pair")
         app.refreshDisplayMappings(reason: "test calibration ready")
         let start = DispatchTime.now().uptimeNanoseconds + 1_000_000
         emitStormWithRecoveredContact(app, device: device, start: start)
@@ -239,6 +290,7 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
             inputSink: ApplicationRecordingInputSink(), cursorController: ApplicationRecordingCursorController(),
             pairingStore: pairingStore(), pairingOverlay: overlay, requiredStablePairingTopologyObservations: 2)
         app.handleDeviceMatched(device)
+        _ = app.handleControlCommand("re-pair")
         app.refreshDisplayMappings(reason: "test first topology observation")
         let reads = inventoryReads
         let calls = overlay.calls
@@ -255,6 +307,7 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
         let store = pairingStore()
         let app = recoveryApplication(store: store, displays: { [target] })
         app.handleDeviceMatched(device)
+        _ = app.handleControlCommand("re-pair")
         app.refreshDisplayMappings(reason: "test target ready while finger already held")
         let start = DispatchTime.now().uptimeNanoseconds + 1_000_000
         app.handleTouchEvent(deviceEvent(device, .move, rawX: 8_192, rawY: 4_800, timestampNanoseconds: start))
@@ -344,6 +397,7 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
         let overlay = ApplicationRecordingPairingOverlay()
         let app = recoveryApplication(store: pairingStore(), overlay: overlay, displays: { [target] })
         app.handleDeviceMatched(TouchDeviceIdentity(locationID: 1))
+        _ = app.handleControlCommand("re-pair")
         app.refreshDisplayMappings(reason: "test idle calibration")
         let calls = overlay.calls
         waitForAsyncWork(milliseconds: 16_000)
@@ -356,6 +410,7 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
         let device = TouchDeviceIdentity(locationID: 1)
         let app = recoveryApplication(store: pairingStore(), displays: { [target] })
         app.handleDeviceMatched(device)
+        _ = app.handleControlCommand("re-pair")
         app.refreshDisplayMappings(reason: "test input diagnostics")
         let start = DispatchTime.now().uptimeNanoseconds + 1_000_000
         for (kind, offset) in [(TouchEvent.Kind.down, UInt64(0)), (.up, 80_000_000)] {
@@ -441,6 +496,7 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
         let overlay = ApplicationRecordingPairingOverlay()
         let app = recoveryApplication(store: store, overlay: overlay, displays: { [target] })
         app.handleDeviceMatched(device)
+        _ = app.handleControlCommand("re-pair")
         app.refreshDisplayMappings(reason: "test prompt")
         _ = app.handleControlCommand("cancel-pairing")
         let count = overlay.calls.count
@@ -479,8 +535,10 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
         let target = display(id: 41, runtimeIdentifier: "LEFT", x: 0)
         let device = TouchDeviceIdentity(locationID: 1)
         let input = ApplicationRecordingInputSink()
-        let app = recoveryApplication(store: store, input: input, displays: { [target] })
+        let other = display(id: 42, runtimeIdentifier: "RIGHT", x: 3_000)
+        let app = recoveryApplication(store: store, input: input, displays: { [target, other] })
         app.handleDeviceMatched(device)
+        app.handleDeviceMatched(TouchDeviceIdentity(locationID: 2))
         app.refreshDisplayMappings(reason: "test prompt")
         performCalibration(app, device: device)
         XCTAssertTrue(store.pairings.isEmpty)
@@ -701,6 +759,7 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
         )
 
         application.handleDeviceMatched(device)
+        _ = application.handleControlCommand("re-pair")
         application.refreshDisplayMappings(reason: "test calibration ready")
         performCalibration(application, device: device)
 
@@ -1021,6 +1080,7 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
         )
 
         application.handleDeviceMatched(device)
+        _ = application.handleControlCommand("re-pair")
         application.refreshDisplayMappings(reason: "test initial screen readiness")
         waitForAsyncWork(milliseconds: 1_100)
         XCTAssertEqual(overlay.calls.filter {
