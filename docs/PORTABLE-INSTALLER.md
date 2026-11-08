@@ -77,7 +77,8 @@ Make sure the Edge has a working picture and a USB connection for touch.
 2. Open `Install Xeneon Touch.app`. Read the explanation, lift your fingers from the Edge and release all mouse buttons.
 3. Choose **Install or Update**. The installer sets up the driver for your logged-in account and starts it. It keeps existing settings and saved display pairings.
 4. If setup shows a red privacy warning, click **Open Privacy Settings**. Enable `MacXeneonEdgeTouchDriver` in the categories listed by setup, then click **Check Again**. If you need to add the driver manually, its path is `~/Library/Application Support/MacXeneonEdgeTouchDriver/bin/MacXeneonEdgeTouchDriver`.
-5. When setup confirms the driver is running, click **Done**. Follow any display pairing prompts, then try a tap on the Edge and check that your mouse still works normally.
+5. If asked to identify your touchscreens, click **Next**, use your mouse or trackpad to select the displays, then click **Continue**. Touch and release each pairing target when it appears.
+6. When setup confirms the driver is ready, click **Done**, then try a tap on the Edge and check that your mouse still works normally.
 
 The driver waits while permission is missing. Each Mac needs its own approvals, even when the same certificate signed both copies. Work Mac permissions may be managed by your administrator.
 

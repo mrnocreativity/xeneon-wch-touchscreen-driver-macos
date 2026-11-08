@@ -12,6 +12,7 @@ final class TouchscreenChooser: NSObject, NSWindowDelegate {
     }
 
     private var panel: NSPanel?
+    private var introduction: NSPanel?
     private var rows: [Row] = []
     private var confirmButton: NSButton?
     private var requiredCount = 0
@@ -117,22 +118,65 @@ final class TouchscreenChooser: NSObject, NSWindowDelegate {
         ])
         panel = window
         selectionChanged()
+        let intro = NSPanel(contentRect: CGRect(x: 0, y: 0, width: 450, height: 164),
+                            styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        intro.title = "Touchscreen Setup"
+        intro.level = .modalPanel
+        intro.hidesOnDeactivate = false
+        intro.collectionBehavior = setupSpaces
+        intro.isReleasedWhenClosed = false
+        intro.delegate = self
+        intro.setFrameOrigin(CGPoint(x: frame.midX - intro.frame.width / 2, y: frame.midY - intro.frame.height / 2))
+        let introHeading = NSTextField(labelWithString: "Identify your touchscreens")
+        introHeading.font = .boldSystemFont(ofSize: 17)
+        let detail = NSTextField(wrappingLabelWithString:
+            "On the next screen, use your mouse or trackpad to select which displays are touchscreens. Then follow the touch targets to finish pairing.")
+        let introCancel = NSButton(title: "Cancel", target: self, action: #selector(cancelSelection))
+        introCancel.keyEquivalent = "\u{1b}"
+        let next = NSButton(title: "Next", target: self, action: #selector(showDisplays))
+        next.keyEquivalent = "\r"
+        let introButtons = NSStackView(views: [introCancel, next])
+        introButtons.spacing = 10
+        let introStack = NSStackView(views: [introHeading, detail, introButtons])
+        introStack.orientation = .vertical
+        introStack.alignment = .leading
+        introStack.spacing = 12
+        introStack.translatesAutoresizingMaskIntoConstraints = false
+        guard let introContent = intro.contentView else { hide(); return false }
+        introContent.addSubview(introStack)
+        NSLayoutConstraint.activate([
+            introStack.leadingAnchor.constraint(equalTo: introContent.leadingAnchor, constant: 20),
+            introStack.trailingAnchor.constraint(equalTo: introContent.trailingAnchor, constant: -20),
+            introStack.topAnchor.constraint(equalTo: introContent.topAnchor, constant: 18),
+            detail.widthAnchor.constraint(equalTo: introStack.widthAnchor)
+        ])
+        introduction = intro
+        NSApp.activate(ignoringOtherApps: true)
+        intro.makeKeyAndOrderFront(nil)
+        guard intro.isVisible else { hide(); return false }
+        return true
+    }
+
+    @objc private func showDisplays() {
+        guard let window = panel, let introduction else { return }
+        introduction.delegate = nil
+        introduction.orderOut(nil)
+        self.introduction = nil
         for row in rows {
             row.overlay.orderFrontRegardless()
             row.badgeWindow.orderFrontRegardless()
             guard PairingOverlayController.displayID(for: row.overlay.screen) == row.id,
                   PairingOverlayController.displayID(for: row.badgeWindow.screen) == row.id else {
-                hide()
-                return false
+                finish(nil)
+                return
             }
         }
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
-        guard window.isVisible, PairingOverlayController.displayID(for: window.screen) == mainDisplayID else {
-            hide()
-            return false
+        guard window.isVisible, PairingOverlayController.displayID(for: window.screen) == CGMainDisplayID() else {
+            finish(nil)
+            return
         }
-        return true
     }
 
     private func makeOverlay(
@@ -214,6 +258,9 @@ final class TouchscreenChooser: NSObject, NSWindowDelegate {
     }
 
     func hide() {
+        introduction?.delegate = nil
+        introduction?.orderOut(nil)
+        introduction = nil
         panel?.delegate = nil
         panel?.orderOut(nil)
         panel = nil

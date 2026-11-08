@@ -157,7 +157,6 @@ func runInstallerFlow() {
         let result: (Int32, String)
         do { result = try run("/bin/sh", arguments) }
         catch { result = (1, error.localizedDescription) }
-        let startup = result.0 == 0 && !removing ? waitForDriverStartup() : nil
         DispatchQueue.main.async {
             window.close()
             if result.0 != 0 {
@@ -167,7 +166,15 @@ func runInstallerFlow() {
             } else if removing {
                 showMessage("Driver removed", "The driver and its settings have been removed from this Mac account. Logs were kept.")
             } else {
-                showInstalled(startup)
+                installerDelegate.operationInProgress = false
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let setup = waitForDriverSetup()
+                    DispatchQueue.main.async {
+                        showInstalled(setup)
+                        application.terminate(nil)
+                    }
+                }
+                return
             }
             installerDelegate.operationInProgress = false
             application.terminate(nil)
@@ -175,41 +182,66 @@ func runInstallerFlow() {
     }
 }
 
-enum DriverStartup: String {
+enum DriverSetup: String {
     case ready
     case privacyRequired
+    case discovering
+    case waitingForHardware
+    case pairing
+    case cancelled
 }
 
-func waitForDriverStartup() -> DriverStartup? {
+func waitForDriverSetup() -> DriverSetup? {
     let driver = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support/MacXeneonEdgeTouchDriver/bin/MacXeneonEdgeTouchDriver")
-    let deadline = ProcessInfo.processInfo.systemUptime + 5
-    repeat {
+    var lastState: DriverSetup?
+    var stateSince = ProcessInfo.processInfo.systemUptime
+    while true {
+        let state: DriverSetup?
         if let (exitCode, reply) = try? run(driver.path, ["setup-status"]), exitCode == 0,
-           let response = try? JSONSerialization.jsonObject(with: Data(reply.utf8)) as? [String: String],
-           let state = response["state"].flatMap(DriverStartup.init(rawValue:)) {
-            return state
+           let response = try? JSONSerialization.jsonObject(with: Data(reply.utf8)) as? [String: String] {
+            state = response["state"].flatMap(DriverSetup.init(rawValue:))
+        } else {
+            state = nil
         }
-        Thread.sleep(forTimeInterval: 0.2)
-    } while ProcessInfo.processInfo.systemUptime < deadline
-    return nil
+        let now = ProcessInfo.processInfo.systemUptime
+        if state != lastState {
+            lastState = state
+            stateSince = now
+        }
+        switch state {
+        case .ready, .cancelled: return state
+        case .waitingForHardware, .discovering, nil:
+            if now - stateSince >= 5 { return state }
+        case .privacyRequired, .pairing:
+            // The driver owns these steps. Keep the installer out of the way.
+            break
+        }
+        Thread.sleep(forTimeInterval: 0.5)
+    }
 }
 
-func showInstalled(_ startup: DriverStartup?) {
-    switch startup {
-    case .privacyRequired:
-        // The installed process owns the permission dialog and performs the checks.
-        return
+func showInstalled(_ setup: DriverSetup?) {
+    switch setup {
     case .ready:
         let alert = NSAlert()
-        alert.messageText = "The driver is running"
-        alert.informativeText = "The driver is installed and running in the background. It starts automatically when you log in. If a touchscreen needs pairing, the driver will guide you."
+        alert.messageText = "Your touchscreen driver is ready"
+        alert.informativeText = "Setup is complete. The driver is running in the background and starts automatically when you log in."
         let mark = NSImage.SymbolConfiguration(pointSize: 48, weight: .regular)
             .applying(NSImage.SymbolConfiguration(paletteColors: [.white, .systemGreen]))
         alert.icon = NSImage(systemSymbolName: "checkmark.circle.fill", accessibilityDescription: nil)?
             .withSymbolConfiguration(mark)
         alert.addButton(withTitle: "Done")
+        application.activate(ignoringOtherApps: true)
         alert.runModal()
-    case nil:
+    case .waitingForHardware:
+        showMessage("Connect a supported touchscreen",
+                    "The driver is installed. Connect your touchscreen over USB to continue setup.")
+    case .cancelled:
+        showMessage("Touchscreen setup was cancelled",
+                    "The driver is installed. Run Install or Update again when you’re ready to finish pairing.")
+    case .privacyRequired, .pairing:
+        break
+    case .discovering, nil:
         showMessage("Driver startup could not be confirmed",
                     "The driver files were installed, but the driver did not report that it started. Try Install or Update again.",
                     style: .warning)

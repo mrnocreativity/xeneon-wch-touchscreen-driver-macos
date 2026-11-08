@@ -33,13 +33,11 @@ enum DriverPrivacyPermission: CaseIterable {
     static var missing: [Self] { allCases.filter { !$0.isGranted } }
 }
 
-/// Guides the user through missing mouse-event access and confirms startup.
+/// Guides the user through granting the driver's privacy permissions.
 final class MousePermissionSetupWindow: NSObject, NSWindowDelegate {
     private let onGranted: () -> Void
     private let onQuit: () -> Void
-    private let onDone: () -> Void
     private var requestedPermissions: Set<DriverPrivacyPermission> = []
-    private(set) var didCompleteSetup = false
     private let status = NSTextField(wrappingLabelWithString: "")
     private let window = NSWindow(
         contentRect: NSRect(x: 0, y: 0, width: 470, height: 245),
@@ -50,12 +48,10 @@ final class MousePermissionSetupWindow: NSObject, NSWindowDelegate {
 
     init(
         onGranted: @escaping () -> Void,
-        onQuit: @escaping () -> Void,
-        onDone: @escaping () -> Void
+        onQuit: @escaping () -> Void
     ) {
         self.onGranted = onGranted
         self.onQuit = onQuit
-        self.onDone = onDone
         super.init()
 
         window.title = "Xeneon Touchscreen Driver Setup"
@@ -79,19 +75,18 @@ final class MousePermissionSetupWindow: NSObject, NSWindowDelegate {
         let buttons = NSStackView(views: [quit, check, settings])
         buttons.spacing = 8
 
-        setContent([title, explanation, status, buttons], alignment: .leading, fullWidth: [explanation, status])
+        setContent([title, explanation, status, buttons], fullWidth: [explanation, status])
     }
 
     private func setContent(
         _ views: [NSView],
-        alignment: NSLayoutConstraint.Attribute,
         fullWidth: [NSView]
     ) {
         let content = NSView()
         window.contentView = content
         let stack = NSStackView(views: views)
         stack.orientation = .vertical
-        stack.alignment = alignment
+        stack.alignment = .leading
         stack.spacing = 12
         stack.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(stack)
@@ -102,26 +97,6 @@ final class MousePermissionSetupWindow: NSObject, NSWindowDelegate {
             stack.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor, constant: -20)
         ])
         NSLayoutConstraint.activate(fullWidth.map { $0.widthAnchor.constraint(equalTo: stack.widthAnchor) })
-    }
-
-    func showSuccess() {
-        didCompleteSetup = true
-        let mark = NSImageView()
-        mark.image = NSImage(systemSymbolName: "checkmark.circle.fill", accessibilityDescription: nil)
-        mark.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 48, weight: .regular)
-            .applying(NSImage.SymbolConfiguration(paletteColors: [.white, .systemGreen]))
-
-        let title = NSTextField(labelWithString: "The driver is running")
-        title.font = .systemFont(ofSize: 17, weight: .semibold)
-        let explanation = NSTextField(wrappingLabelWithString:
-            "The driver is installed and running in the background. It starts automatically when you log in.\n\nIf a touchscreen needs pairing, the driver will show a target to touch."
-        )
-        explanation.alignment = .center
-        let done = NSButton(title: "Done", target: self, action: #selector(finishSetup))
-        done.keyEquivalent = "\r"
-        window.setContentSize(NSSize(width: 470, height: 245))
-        setContent([mark, title, explanation, done], alignment: .centerX, fullWidth: [explanation])
-        window.makeFirstResponder(done)
     }
 
     func show() {
@@ -139,13 +114,8 @@ final class MousePermissionSetupWindow: NSObject, NSWindowDelegate {
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        if didCompleteSetup { onDone() }
-        else { onQuit() }
+        onQuit()
         return false
-    }
-
-    @objc private func finishSetup() {
-        onDone()
     }
 
     @objc private func quitSetup() {
