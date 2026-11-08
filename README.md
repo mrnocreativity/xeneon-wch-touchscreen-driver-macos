@@ -72,7 +72,13 @@ exactly what is needed, and continue verification after you confirm each step.
 A browser-only chatbot without access to this Mac can explain the process but
 cannot perform the installation.
 
-## Manual Installation
+## Portable Installer
+
+The portable installer contains a signed copy of this fork's driver. On the receiving Mac, open **Install Xeneon Touch.app** and choose **Install or Update**. You can install without Xcode or Swift on that Mac. Updates keep your existing settings and saved display pairings.
+
+See the [portable installer guide](docs/PORTABLE-INSTALLER.md) to build the ZIP on a development Mac.
+
+## Build and Install from Source
 
 To install for the current user, just run the following from the root of the checked out repository on the relevant mac:
 

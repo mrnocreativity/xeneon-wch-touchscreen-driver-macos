@@ -1,135 +1,327 @@
 #!/bin/sh
 set -eu
+umask 077
 
 label="com.ajvwhite.MacXeneonEdgeTouchDriver"
 binary_name="MacXeneonEdgeTouchDriver"
 package_root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+prebuilt=0
 app_support_dir="${HOME}/Library/Application Support/MacXeneonEdgeTouchDriver"
 bin_dir="${app_support_dir}/bin"
 log_dir="${HOME}/Library/Logs/MacXeneonEdgeTouchDriver"
 launch_agents_dir="${HOME}/Library/LaunchAgents"
-plist_template="${package_root}/Resources/com.ajvwhite.MacXeneonEdgeTouchDriver.plist.template"
+plist_template="${package_root}/Resources/${label}.plist.template"
 plist_path="${launch_agents_dir}/${label}.plist"
 installed_binary="${bin_dir}/${binary_name}"
 config_path="${app_support_dir}/config.json"
-driver_log_path="${log_dir}/driver.log"
 uid="$(id -u)"
-codesign_identity="${CODESIGN_IDENTITY:-}"
-codesign_description="linker ad hoc signature"
-if [ -n "$codesign_identity" ]; then
-  codesign_description="$codesign_identity"
-fi
+domain="gui/${uid}"
+service="${domain}/${label}"
+lock_dir="${app_support_dir}/.install-lock"
+stage_dir=
+bin_stage=
+plist_stage=
+config_stage=
+backup_dir=
+lock_acquired=0
+rollback_needed=0
+activation_attempted=0
+old_loaded=0
+had_binary=0
+had_plist=0
+had_config=0
+binary_changed=0
+plist_changed=0
+config_changed=0
 
-escape_sed_replacement() {
-  printf '%s' "$1" | sed 's/[\/&]/\\&/g'
+fail() {
+  printf '%s\n' "$*" >&2
+  exit 1
 }
 
-if ! command -v swift >/dev/null 2>&1; then
-  echo "Swift toolchain not found. Install Xcode or Command Line Tools, then rerun this script." >&2
-  exit 1
+case "$#:$*" in
+  0:) ;;
+  1:--prebuilt) prebuilt=1 ;;
+  1:--help|1:-h)
+    printf 'Usage: %s [--prebuilt]\n' "$0"
+    printf 'Install for the current user. --prebuilt uses the signed portable installer files.\n'
+    exit 0
+    ;;
+  *) fail 'Usage: install.sh [--prebuilt]' ;;
+esac
+if [ "$prebuilt" -eq 1 ]; then
+  plist_template="${package_root}/${label}.plist.template"
+  [ -z "${CODESIGN_IDENTITY:-}" ] || fail 'The portable installer files are already signed. Remove CODESIGN_IDENTITY and try again.'
 fi
 
-if [ ! -f "$plist_template" ]; then
-  echo "LaunchAgent template not found: ${plist_template}" >&2
-  exit 1
-fi
-
-echo "Building ${binary_name} in release mode..."
-swift build -c release --package-path "$package_root"
-
-mkdir -p "$bin_dir" "$log_dir" "$launch_agents_dir"
-install -m 755 "${package_root}/.build/release/${binary_name}" "$installed_binary"
-if [ -n "$codesign_identity" ]; then
-  if ! command -v codesign >/dev/null 2>&1; then
-    echo "codesign not found, but CODESIGN_IDENTITY was supplied." >&2
-    exit 1
-  fi
-  codesign \
-    --force \
-    --sign "$codesign_identity" \
-    --identifier "$label" \
-    --timestamp=none \
-    "$installed_binary"
-fi
-touch "${log_dir}/stdout.log" "${log_dir}/stderr.log" "$driver_log_path"
-
-if [ ! -f "$config_path" ]; then
-  cat > "$config_path" <<EOF
-{
-  "logLevel": "info",
-  "timing": {
-    "warpToClickDelayMs": 10,
-    "downToUpDelayMs": 20,
-    "clickToWarpBackDelayMs": 10,
-    "tapDebounceMs": 50,
-    "stuckGestureTimeoutMs": 2000
-  },
-  "display": {
-    "vendorNumber": 3672,
-    "modelNumber": 60672,
-    "serialNumber": null,
-    "expectedWidth": 2560,
-    "expectedHeight": 720
-  },
-  "gesture": {
-    "multiTouchEnabled": false,
-    "holdToDragMs": 300,
-    "movementThresholdPoints": 8,
-    "scrollSensitivity": 1.0,
-    "doubleClickDistancePoints": 12
-  },
-  "diagnostics": {
-    "fileLogPath": "${driver_log_path}",
-    "fileLogMaxBytes": 5242880
-  }
+# Verify Apple-issued Developer ID signatures, executable identities and a
+# shared signing team before running the bundled preparation tool.
+verify_prebuilt() {
+  developer_id='=anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.13] exists'
+  codesign --verify --strict -R "$developer_id and identifier \"$label\"" "$stage_dir/binary" || fail 'The driver signature is invalid. Create or obtain a new portable installer.'
+  codesign -d --verbose=2 "$stage_dir/binary" > "$stage_dir/signature.txt" 2>&1 || fail 'Could not read the driver signature.'
+  driver_team=
+  while IFS= read -r signature_line || [ -n "$signature_line" ]; do
+    case "$signature_line" in
+      TeamIdentifier=*)
+        [ -z "$driver_team" ] || fail 'The driver has conflicting signing information.'
+        driver_team=${signature_line#TeamIdentifier=}
+        ;;
+    esac
+  done < "$stage_dir/signature.txt"
+  case "$driver_team" in
+    ''|*[!A-Z0-9]*) fail 'The driver does not have a valid Developer ID team.' ;;
+  esac
+  codesign --verify --strict -R "$developer_id and identifier \"$binary_name.PrepareInstall\" and certificate leaf[subject.OU] = \"$driver_team\"" "$stage_dir/prepare-install" || fail 'The installer signature does not match the driver. Create or obtain a new portable installer.'
 }
-EOF
-fi
 
-escaped_binary="$(escape_sed_replacement "$installed_binary")"
-escaped_log_dir="$(escape_sed_replacement "$log_dir")"
-sed \
-  -e "s/__BIN_PATH__/${escaped_binary}/g" \
-  -e "s/__LOG_DIR__/${escaped_log_dir}/g" \
-  "$plist_template" > "$plist_path"
-
-launchctl bootout "gui/${uid}/${label}" >/dev/null 2>&1 || true
-attempt=1
-while ! launchctl bootstrap "gui/${uid}" "$plist_path"; do
-  if [ "$attempt" -ge 5 ]; then
-    echo "Could not bootstrap ${label} after ${attempt} attempts." >&2
-    exit 1
+# Only the service-not-found status means absent. Other query failures abort.
+# Do not parse launchctl's human-readable output as a stable API.
+job_state() {
+  if launchctl print "$service" > "$stage_dir/job-state.txt" 2> "$stage_dir/job-error.txt"; then
+    return 0
+  else
+    query_status=$?
+    if [ "$query_status" -eq 113 ]; then
+      return 1
+    fi
+    cat "$stage_dir/job-error.txt" >&2
+    printf 'Cannot determine LaunchAgent state (launchctl status %s).\n' "$query_status" >&2
+    return 2
   fi
-  attempt=$((attempt + 1))
-  sleep 1
+}
+
+restore_file() {
+  target=$1
+  previous=$2
+  existed=$3
+  if [ "$existed" -eq 1 ]; then
+    mv -f "$previous" "$target"
+  else
+    rm -f "$target"
+  fi
+}
+
+rollback() {
+  printf 'Installation failed; attempting rollback. Prior files: %s\n' "$backup_dir" >&2
+  prior_still_loaded=0
+  if [ "$activation_attempted" -eq 1 ]; then
+    # A failed bootstrap can still have registered a service. Stop it before
+    # restoring files so KeepAlive cannot restart it during recovery.
+    if job_state; then
+      if ! launchctl bootout "$service"; then
+        printf 'Rollback incomplete: could not unload the replacement job; files were not restored.\n' >&2
+        return 1
+      fi
+    else
+      state_status=$?
+      if [ "$state_status" -ne 1 ]; then
+        printf 'Rollback incomplete: job state is unknown; files were not restored.\n' >&2
+        return 1
+      fi
+    fi
+  else
+    # A job can appear during publication even if none was registered during
+    # preflight. Do not restore files under a registration we did not create.
+    if job_state; then
+      if [ "$old_loaded" -eq 0 ] || [ "$binary_changed" -eq 1 ] || [ "$plist_changed" -eq 1 ] || [ "$config_changed" -eq 1 ]; then
+        printf 'Rollback incomplete: an unexpected job was registered during replacement; files were not restored.\n' >&2
+        return 1
+      fi
+      # The initial bootout failed without removing the old job. No files
+      # have been published at this point.
+      prior_still_loaded=1
+    else
+      state_status=$?
+      if [ "$state_status" -ne 1 ]; then
+        printf 'Rollback incomplete: job state is unknown; files were not restored.\n' >&2
+        return 1
+      fi
+    fi
+  fi
+
+  restore_failed=0
+  if [ "$binary_changed" -eq 1 ]; then
+    restore_file "$installed_binary" "$bin_stage/previous-binary" "$had_binary" || restore_failed=1
+  fi
+  if [ "$plist_changed" -eq 1 ]; then
+    restore_file "$plist_path" "$plist_stage/previous-plist" "$had_plist" || restore_failed=1
+  fi
+  if [ "$config_changed" -eq 1 ]; then
+    # An existing config is never replaced, even during rollback.
+    rm -f "$config_path" || restore_failed=1
+  fi
+  if [ "$restore_failed" -eq 1 ]; then
+    printf 'Rollback incomplete: one or more files could not be restored; prior job was not restarted.\n' >&2
+    return 1
+  fi
+  printf 'Rollback restored the prior installed files (including prior absence).\n' >&2
+  if [ "$old_loaded" -eq 1 ] && [ "$prior_still_loaded" -eq 0 ]; then
+    if ! launchctl bootstrap "$domain" "$plist_path"; then
+      printf 'Rollback incomplete: files restored, but launchd did not accept the prior job.\n' >&2
+      return 1
+    fi
+    printf 'launchd accepted the prior job again; continued operation has not been checked.\n' >&2
+  elif [ "$prior_still_loaded" -eq 1 ]; then
+    printf 'The prior job is still registered; continued operation has not been checked.\n' >&2
+  else
+    printf 'No prior job was registered; rollback left it unregistered.\n' >&2
+  fi
+}
+
+cleanup() {
+  result=$?
+  trap - EXIT HUP INT TERM
+  if [ "$rollback_needed" -eq 1 ]; then
+    if ! rollback; then
+      printf 'Manual recovery is required. Backups remain at: %s\n' "$backup_dir" >&2
+    fi
+    result=1
+  fi
+  for scratch in "$stage_dir" "$bin_stage" "$plist_stage" "$config_stage"; do
+    if [ -n "$scratch" ]; then
+      rm -rf "$scratch" || printf 'Could not remove staging directory: %s\n' "$scratch" >&2
+    fi
+  done
+  if [ "$lock_acquired" -eq 1 ]; then
+    rmdir "$lock_dir" || printf 'Could not remove installer lock: %s\n' "$lock_dir" >&2
+  fi
+  exit "$result"
+}
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
+
+case "$HOME" in
+  /*) ;;
+  *) fail 'HOME must be an absolute path.' ;;
+esac
+for tool in launchctl plutil; do
+  command -v "$tool" >/dev/null 2>&1 || fail "Required tool not found: $tool"
 done
-launchctl enable "gui/${uid}/${label}" >/dev/null 2>&1 || true
-launchctl kickstart -k "gui/${uid}/${label}" >/dev/null 2>&1 || true
+if [ "$prebuilt" -eq 1 ] || [ -n "${CODESIGN_IDENTITY:-}" ]; then
+  command -v codesign >/dev/null 2>&1 || fail 'codesign not found.'
+fi
+if [ "$prebuilt" -eq 0 ]; then
+  command -v swift >/dev/null 2>&1 || fail 'Swift is required to build from source. Use a portable installer to install without Xcode.'
+else
+  for payload in "$package_root/../Helpers/$binary_name" "$package_root/../Helpers/PrepareInstall"; do
+    [ ! -L "$payload" ] && [ -f "$payload" ] && [ -s "$payload" ] && [ -x "$payload" ] || fail "The portable installer is missing a valid executable: $payload"
+  done
+fi
+[ -f "$plist_template" ] || fail "LaunchAgent template not found: $plist_template"
 
-cat <<EOF
-Installed ${binary_name}.
+# Refuse targets whose replacement semantics differ from regular files.
+for target in "$installed_binary" "$config_path" "$plist_path"; do
+  if [ -L "$target" ] || { [ -e "$target" ] && [ ! -f "$target" ]; }; then
+    fail "Expected a regular file or an absent path: $target"
+  fi
+done
+for directory in "$app_support_dir" "$bin_dir" "$launch_agents_dir" "$log_dir" "$app_support_dir/install-backups"; do
+  [ ! -L "$directory" ] || fail "Refusing a symbolic-link installation directory: $directory"
+done
+mkdir -p "$app_support_dir"
+mkdir "$lock_dir" || fail "Another installer may be running. Check before removing: $lock_dir"
+lock_acquired=1
+stage_dir="$(mktemp -d "${TMPDIR:-/tmp}/Xeneon-install.XXXXXX")"
 
-LaunchAgent:
-  ${plist_path}
+if [ "$prebuilt" -eq 1 ]; then
+  echo 'Checking the installer files...'
+  install -m 755 "$package_root/../Helpers/$binary_name" "$stage_dir/binary"
+  install -m 755 "$package_root/../Helpers/PrepareInstall" "$stage_dir/prepare-install"
+  verify_prebuilt
+else
+  echo "Building ${binary_name} in release mode..."
+  swift build -c release --package-path "$package_root"
+  install -m 755 "${package_root}/.build/release/${binary_name}" "$stage_dir/binary"
+fi
+[ -s "$stage_dir/binary" ] && [ -x "$stage_dir/binary" ] || fail 'The staged executable is empty or not executable.'
 
-Binary:
-  ${installed_binary}
+# CODESIGN_IDENTITY follows isleofgreg's interface from PR #4. Both signing
+# and verification happen before replacing any installed file.
+if [ -n "${CODESIGN_IDENTITY:-}" ]; then
+  # Preserve the fork's existing Developer ID identity across installation paths.
+  codesign --force --sign "$CODESIGN_IDENTITY" --identifier "$label" --timestamp=none "$stage_dir/binary"
+  codesign --verify --strict "$stage_dir/binary"
+fi
+if [ "$prebuilt" -eq 1 ]; then
+  "$stage_dir/prepare-install" "$plist_template" "$stage_dir" "$installed_binary" "$config_path" "$log_dir"
+else
+  swift "$package_root/Scripts/prepare-install.swift" "$plist_template" "$stage_dir" "$installed_binary" "$config_path" "$log_dir"
+fi
+plutil -lint -- "$stage_dir/agent.plist"
 
-Code signing:
-  ${codesign_description}
+# Prepare destination directories, retained backups and same-filesystem rename
+# sources before stopping the job. Existing log files are not truncated/touched.
+mkdir -p "$bin_dir" "$log_dir" "$launch_agents_dir" "$app_support_dir/install-backups"
+backup_dir="$(mktemp -d "$app_support_dir/install-backups/transaction.XXXXXX")"
+bin_stage="$(mktemp -d "$bin_dir/.install.XXXXXX")"
+plist_stage="$(mktemp -d "$launch_agents_dir/.xeneon-install.XXXXXX")"
+config_stage="$(mktemp -d "$app_support_dir/.install.XXXXXX")"
+if [ -f "$installed_binary" ]; then
+  had_binary=1
+  cp -p "$installed_binary" "$backup_dir/binary"
+  cp -p "$backup_dir/binary" "$bin_stage/previous-binary"
+fi
+if [ -f "$plist_path" ]; then
+  had_plist=1
+  cp -p "$plist_path" "$backup_dir/agent.plist"
+  cp -p "$backup_dir/agent.plist" "$plist_stage/previous-plist"
+fi
+if [ -f "$config_path" ]; then
+  had_config=1
+  cp -p "$config_path" "$backup_dir/config.json"
+  cmp -s "$config_path" "$stage_dir/config.json" || fail 'Config changed during preflight; rerun the installer.'
+fi
+install -m 755 "$stage_dir/binary" "$bin_stage/next-binary"
+install -m 644 "$stage_dir/agent.plist" "$plist_stage/next-plist"
+if [ "$had_config" -eq 0 ]; then
+  install -m 600 "$stage_dir/config.json" "$config_stage/next-config"
+fi
+launchctl print "$domain" > "$stage_dir/domain-state.txt"
+if job_state; then
+  old_loaded=1
+  [ "$had_binary" -eq 1 ] && [ "$had_plist" -eq 1 ] || fail 'A job is registered, but its installed binary or plist is missing; cannot prepare rollback.'
+  plutil -lint -- "$backup_dir/agent.plist"
+  plutil -extract Label raw -expect string -n -o "$stage_dir/prior-label" -- "$backup_dir/agent.plist"
+  printf '%s' "$label" > "$stage_dir/expected-label"
+  cmp -s "$stage_dir/prior-label" "$stage_dir/expected-label" || fail 'The prior plist has an unexpected Label; cannot prepare rollback.'
+else
+  state_status=$?
+  [ "$state_status" -eq 1 ] || fail 'LaunchAgent preflight query failed.'
+fi
+printf 'binary=%s\nplist=%s\nconfig=%s\njob_registered=%s\n' "$had_binary" "$had_plist" "$had_config" "$old_loaded" > "$backup_dir/state.txt"
 
-Logs:
-  ${log_dir}
-  ${driver_log_path}
+# From here failures require recovery. These renames are atomic per file only;
+# the set of files and launchd state cannot be committed atomically together.
+rollback_needed=1
+if [ "$old_loaded" -eq 1 ]; then
+  launchctl bootout "$service"
+fi
+binary_changed=1
+mv -f "$bin_stage/next-binary" "$installed_binary"
+plist_changed=1
+mv -f "$plist_stage/next-plist" "$plist_path"
+if [ "$had_config" -eq 0 ]; then
+  config_changed=1
+  mv -f "$config_stage/next-config" "$config_path"
+fi
+activation_attempted=1
+# RunAtLoad starts the job. Leave persistent enable/disable overrides alone.
+launchctl bootstrap "$domain" "$plist_path"
+rollback_needed=0
 
-LaunchAgent stdout/stderr:
-  ${log_dir}/stdout.log
-  ${log_dir}/stderr.log
+cat <<EOF_RESULT
+Installed ${binary_name}. launchd accepted the new job.
+Open System Settings > Privacy & Security and allow this driver to control
+input and read the touch device. Depending on your macOS version, these
+permissions are named Device Control and Data Access (or Accessibility)
+and Input Monitoring. If asked to choose a file, use the Binary path below.
+Then try a touch on the Edge. Starting the service does not confirm that
+permissions are granted or that touch input is working.
 
-Grant macOS permissions to the installed binary, or to the app that launches it if macOS attributes permissions there:
-  - Input Monitoring
-  - Accessibility
-
-Config file location:
-  ${config_path}
-EOF
+Binary: ${installed_binary}
+LaunchAgent: ${plist_path}
+Config: ${config_path}
+Logs: ${log_dir}
+Prior files and registration state: ${backup_dir}
+EOF_RESULT
