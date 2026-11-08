@@ -112,6 +112,28 @@ func runInstallerFlow() {
         confirm.addButton(withTitle: "Cancel")
         confirm.addButton(withTitle: "Remove Driver")
         guard confirm.runModal() == .alertSecondButtonReturn else { return }
+    } else {
+        let driver = bundle.appendingPathComponent("Contents/Helpers/MacXeneonEdgeTouchDriver")
+        let probeStatus = (try? run(driver.path, ["--check-hardware"]))?.0
+        if probeStatus != 0 {
+            let warning = NSAlert()
+            warning.alertStyle = .warning
+            switch probeStatus {
+            case 3:
+                warning.messageText = "No supported touch controller detected"
+                warning.informativeText = "The driver will only provide touch input once a supported touchscreen is connected over USB. Check your USB data connection, or install now and connect a supported touchscreen later."
+            case 4:
+                warning.messageText = "Touch controller format could not be verified"
+                warning.informativeText = "A USB touch controller was detected, but its touch reports may be incompatible with this driver."
+            default:
+                warning.messageText = "The hardware check could not run"
+                warning.informativeText = "The installer could not determine whether this setup has a supported touch controller."
+            }
+            warning.addButton(withTitle: "Cancel")
+            warning.addButton(withTitle: "Install Anyway")
+            warning.buttons[0].keyEquivalent = "\u{1b}"
+            guard warning.runModal() == .alertSecondButtonReturn else { return }
+        }
     }
 
     let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 110),

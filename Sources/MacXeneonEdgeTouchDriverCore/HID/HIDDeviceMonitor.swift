@@ -84,15 +84,9 @@ public final class HIDDeviceMonitor {
             return
         }
 
-        let matching: [String: Any] = [
-            kIOHIDVendorIDKey as String: XeneonEdgeDevice.vendorID,
-            kIOHIDProductIDKey as String: XeneonEdgeDevice.productID,
-            kIOHIDDeviceUsagePageKey as String: kHIDPage_GenericDesktop,
-            kIOHIDDeviceUsageKey as String: kHIDUsage_GD_Mouse
-        ]
         let context = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
 
-        IOHIDManagerSetDeviceMatching(manager, matching as CFDictionary)
+        IOHIDManagerSetDeviceMatching(manager, TouchHardwareProbe.deviceMatching as CFDictionary)
         IOHIDManagerRegisterDeviceMatchingCallback(manager, hidDeviceMatchedCallback, context)
         IOHIDManagerRegisterDeviceRemovalCallback(manager, hidDeviceRemovedCallback, context)
         IOHIDManagerScheduleWithRunLoop(manager, CFRunLoopGetCurrent(), CFRunLoopMode.defaultMode.rawValue)

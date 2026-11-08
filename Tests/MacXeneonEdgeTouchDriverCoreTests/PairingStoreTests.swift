@@ -4,6 +4,21 @@ import Foundation
 import XCTest
 
 final class PairingStoreTests: XCTestCase {
+    func testLearnedDisplayModelSurvivesMappingInvalidationAndReload() throws {
+        let url = temporaryURL()
+        let target = makeDisplay(id: 41, serial: 0, vendor: 501, model: 601)
+        let reconnected = makeDisplay(id: 49, serial: 0, vendor: 501, model: 601)
+        let device = TouchDeviceIdentity(locationID: 1)
+        let store = PairingStore(url: url)
+        try store.assign(device: device, to: target, connectedDevices: [device], displays: [target])
+        try store.rememberModel(of: target)
+        try store.invalidateAmbiguous()
+
+        let reloaded = PairingStore(url: url)
+        XCTAssertTrue(reloaded.recognizesModel(of: reconnected))
+        XCTAssertNil(reloaded.resolveDisplay(for: device, connectedDevices: [device], displays: [reconnected]))
+    }
+
     func testOlderCalibrationCannotBypassNewStormAdmissionPolicy() throws {
         let url = temporaryURL()
         let device = TouchDeviceIdentity(locationID: 1, serialNumber: "UNIQUE")

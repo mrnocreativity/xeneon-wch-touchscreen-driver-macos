@@ -23,7 +23,7 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
         app.handleDeviceMatched(controller)
         app.refreshDisplayMappings(reason: "controller appears before its display")
         XCTAssertNil(try statusRecords(app).first?["displayID"])
-        XCTAssertFalse(overlay.calls.contains(.fallback(monitor.runtimeIdentifier)))
+        XCTAssertFalse(overlay.calls.contains(.choose([monitor.displayID], 1)))
         displays.append(first)
         app.refreshDisplayMappings(reason: "first unique observation")
         XCTAssertNil(try statusRecords(app).first?["displayID"])
@@ -50,7 +50,7 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
         XCTAssertTrue(store.pairings.isEmpty)
     }
 
-    func testUnlistedDisplayCanPairAfterSkippingAnOrdinaryMonitor() throws {
+    func testChooserPairsOnlySelectedDisplayAndRemembersItOnReconnect() throws {
         let ordinary = DisplaySnapshot(displayID: 10, runtimeIdentifier: "ORDINARY",
             vendorNumber: 100, modelNumber: 200, serialNumber: 0,
             bounds: CGRect(x: 0, y: 0, width: 1920, height: 1080), pixelsWide: 1920, pixelsHigh: 1080)
@@ -69,15 +69,18 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
 
         app.handleDeviceMatched(device)
         app.refreshDisplayMappings(reason: "controller with an unlisted display")
-        XCTAssertTrue(overlay.calls.contains(.fallback("ORDINARY")))
+        XCTAssertTrue(overlay.calls.contains(.choose([ordinary.displayID, unknown.displayID], 1)))
+        XCTAssertFalse(overlay.calls.contains(.show("ORDINARY", 1, 1)))
         XCTAssertNil(try statusRecords(app).first?["displayID"])
 
-        overlay.advanceFallback()
+        overlay.choose([unknown.displayID])
         waitForAsyncWork(milliseconds: 50)
-        XCTAssertTrue(overlay.calls.contains(.fallback("UNLISTED")))
+        XCTAssertTrue(overlay.calls.contains(.show("UNLISTED", 1, 1)))
         performCalibration(app, device: device)
         XCTAssertTrue(input.calls.isEmpty)
         XCTAssertEqual(store.pairings.first?.displayID, unknown.displayID)
+        XCTAssertTrue(store.recognizesModel(of: unknown))
+        XCTAssertFalse(store.recognizesModel(of: ordinary))
         XCTAssertEqual(try statusRecords(app).first?["displayID"] as? UInt32, unknown.displayID)
 
         app.handleDeviceRemoval(device)
@@ -87,6 +90,8 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
         app.refreshDisplayMappings(reason: "controller with ambiguous identity reconnected")
         XCTAssertNil(try statusRecords(app).first?["displayID"])
         XCTAssertEqual(try statusRecords(app).first?["state"] as? String, "calibrating")
+        XCTAssertEqual(overlay.calls.filter { $0 == .choose([ordinary.displayID, unknown.displayID], 1) }.count, 1)
+        XCTAssertEqual(overlay.calls.filter { $0 == .show("UNLISTED", 1, 1) }.count, 2)
     }
 
     func testSavedUnlistedDisplayPairingRestoresWithUniqueHardwareIDs() throws {
@@ -105,7 +110,36 @@ final class MacXeneonEdgeTouchDriverApplicationTests: XCTestCase {
         app.handleDeviceMatched(reconnected)
         app.refreshDisplayMappings(reason: "unlisted hardware pairing reconnects")
         XCTAssertEqual(try statusRecords(app).first?["displayID"] as? UInt32, target.displayID)
-        XCTAssertFalse(overlay.calls.contains(.fallback(target.runtimeIdentifier)))
+        XCTAssertFalse(overlay.calls.contains(.choose([target.displayID], 1)))
+    }
+
+    func testChooserKeepsIdenticalTouchscreensAsSeparateTargets() throws {
+        let first = DisplaySnapshot(displayID: 11, runtimeIdentifier: "LEFT", vendorNumber: 500,
+            modelNumber: 600, serialNumber: 0, bounds: CGRect(x: 0, y: 0, width: 1280, height: 480),
+            pixelsWide: 1280, pixelsHigh: 480)
+        let second = DisplaySnapshot(displayID: 12, runtimeIdentifier: "RIGHT", vendorNumber: 500,
+            modelNumber: 600, serialNumber: 0, bounds: CGRect(x: 1280, y: 0, width: 1280, height: 480),
+            pixelsWide: 1280, pixelsHigh: 480)
+        let devices = [TouchDeviceIdentity(locationID: 1), TouchDeviceIdentity(locationID: 2)]
+        let overlay = ApplicationRecordingPairingOverlay()
+        let store = pairingStore()
+        let app = MacXeneonEdgeTouchDriverApplication(automaticallyScheduleConfidence: false,
+            configuration: immediateConfiguration(),
+            displayResolver: DisplayResolver(activeDisplayProvider: { [first, second] }),
+            inputSink: ApplicationRecordingInputSink(), cursorController: ApplicationRecordingCursorController(),
+            pairingStore: store, pairingOverlay: overlay)
+        devices.forEach { app.handleDeviceMatched($0) }
+        app.refreshDisplayMappings(reason: "two identical unlisted screens")
+        XCTAssertTrue(overlay.calls.contains(.choose([11, 12], 2)))
+        XCTAssertFalse(overlay.calls.contains(.show("LEFT", 1, 2)))
+        overlay.choose([first.displayID, second.displayID])
+        waitForAsyncWork(milliseconds: 50)
+        XCTAssertTrue(overlay.calls.contains(.show("LEFT", 1, 2)))
+        performCalibration(app, device: devices[0])
+        waitForAsyncWork(milliseconds: 700)
+        XCTAssertTrue(overlay.calls.contains(.show("RIGHT", 2, 2)))
+        performCalibration(app, device: devices[1])
+        XCTAssertEqual(Set(store.pairings.map(\.displayID)), [11, 12])
     }
 
     func testHeldFingerCannotBecomeDelayedClickAfterResponsivenessRecovery() throws {
@@ -1253,7 +1287,7 @@ private final class ApplicationRecordingCursorController: CursorController {
 private final class ApplicationRecordingPairingOverlay: PairingOverlayPresenting {
     enum Call: Equatable {
         case show(String, Int, Int)
-        case fallback(String)
+        case choose([CGDirectDisplayID], Int)
         case confirmation(String)
         case hide
     }
@@ -1261,7 +1295,7 @@ private final class ApplicationRecordingPairingOverlay: PairingOverlayPresenting
     private var storedCalls: [Call] = []
     private let canShow: Bool
     private var failuresBeforeSuccess: Int
-    private var nextDisplay: (() -> Void)?
+    private var selection: ((Set<CGDirectDisplayID>?) -> Void)?
     var ready = true
     var calls: [Call] {
         lock.lock()
@@ -1283,18 +1317,22 @@ private final class ApplicationRecordingPairingOverlay: PairingOverlayPresenting
         return canShow
     }
     func isReady(on display: DisplaySnapshot) -> Bool { ready }
-    func showFallback(on display: DisplaySnapshot, nextDisplay: (() -> Void)?, cancel: @escaping () -> Void) -> Bool {
+    func chooseDisplays(
+        from displays: [DisplaySnapshot], eligible: Set<CGDirectDisplayID>, count: Int,
+        completion: @escaping (Set<CGDirectDisplayID>?) -> Void
+    ) -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        storedCalls.append(.fallback(display.runtimeIdentifier))
-        self.nextDisplay = nextDisplay
+        storedCalls.append(.choose(displays.map(\.displayID), count))
+        selection = completion
         return canShow
     }
-    func advanceFallback() {
+    func choose(_ ids: Set<CGDirectDisplayID>) {
         lock.lock()
-        let advance = nextDisplay
+        let completion = selection
+        selection = nil
         lock.unlock()
-        advance?()
+        completion?(ids)
     }
     func showConfirmation(on display: DisplaySnapshot) {
         lock.lock()

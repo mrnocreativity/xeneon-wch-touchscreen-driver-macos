@@ -6,10 +6,19 @@ import MacXeneonEdgeTouchDriverCore
 struct MacXeneonEdgeTouchDriverMain {
     static func main() {
         let arguments = Array(CommandLine.arguments.dropFirst())
+        if arguments == ["--check-hardware"] {
+            let result = TouchHardwareProbe.detect()
+            switch result {
+            case .supported: print("Supported USB touch controller detected.")
+            case .noController: print("No supported USB touch controller detected.")
+            case .unverifiedReportFormat: print("A touch controller was detected, but its report format could not be verified.")
+            }
+            exit(result.rawValue)
+        }
         if !arguments.isEmpty {
             guard arguments.count == 1,
                   ["status", "re-pair", "cancel-pairing"].contains(arguments[0]) else {
-                print("Usage: MacXeneonEdgeTouchDriver [status | re-pair | cancel-pairing]")
+                print("Usage: MacXeneonEdgeTouchDriver [--check-hardware | status | re-pair | cancel-pairing]")
                 exit(arguments == ["--help"] ? EXIT_SUCCESS : EXIT_FAILURE)
             }
             do {

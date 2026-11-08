@@ -51,6 +51,7 @@ public struct TouchDisplayPairing: Codable, Equatable, Sendable {
 private struct PairingFile: Codable {
     var version = 4
     var pairings: [TouchDisplayPairing]
+    var learnedDisplayModels: [String]? = nil
 }
 
 private struct LegacyPairingFile: Decodable {
@@ -60,6 +61,7 @@ private struct LegacyPairingFile: Decodable {
 /// Loads, validates, resolves, and atomically persists touch-display assignments.
 public final class PairingStore {
     public private(set) var pairings: [TouchDisplayPairing]
+    private var learnedDisplayModels: Set<String> = []
 
     private let url: URL
     private let fileManager: FileManager
@@ -234,6 +236,22 @@ public final class PairingStore {
         pairings = updated
     }
 
+    func recognizesModel(of display: DisplaySnapshot) -> Bool {
+        learnedDisplayModels.contains(Self.modelKey(for: display))
+    }
+
+    func rememberModel(of display: DisplaySnapshot) throws {
+        let key = Self.modelKey(for: display)
+        guard !learnedDisplayModels.contains(key) else { return }
+        let updated = learnedDisplayModels.union([key])
+        try save(pairings, learnedModels: updated)
+        learnedDisplayModels = updated
+    }
+
+    private static func modelKey(for display: DisplaySnapshot) -> String {
+        "\(display.vendorNumber):\(display.modelNumber)"
+    }
+
     /// Revocation is immediate even if persistence fails. Old records cannot regain
     /// same-process authority while this store is alive.
     public func invalidateAmbiguous() throws {
@@ -304,6 +322,7 @@ public final class PairingStore {
                 DriverLoggers.log(.notice, category: .display, "Saved pairings require the current physical calibration flow.")
                 return
             }
+            learnedDisplayModels = Set(decoded.learnedDisplayModels ?? [])
             let bootCompatiblePairings = decoded.pairings.filter {
                 $0.calibrationRevision == TouchDisplayPairing.currentCalibrationRevision &&
                 ($0.scope == .hardware || $0.observationSession == observationSession)
@@ -335,13 +354,14 @@ public final class PairingStore {
         try save(pairings)
     }
 
-    private func save(_ records: [TouchDisplayPairing]) throws {
+    private func save(_ records: [TouchDisplayPairing], learnedModels: Set<String>? = nil) throws {
         let directory = url.deletingLastPathComponent()
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
 
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try encoder.encode(PairingFile(pairings: records))
+        let models = (learnedModels ?? learnedDisplayModels).sorted()
+        let data = try encoder.encode(PairingFile(pairings: records, learnedDisplayModels: models.isEmpty ? nil : models))
         try data.write(to: url, options: .atomic)
     }
 

@@ -146,12 +146,13 @@ public final class DisplayResolver {
             )
         }
 
-        return matches.sorted { lhs, rhs in
-            if lhs.bounds.origin.x != rhs.bounds.origin.x {
-                return lhs.bounds.origin.x < rhs.bounds.origin.x
-            }
-            return lhs.bounds.origin.y < rhs.bounds.origin.y
-        }
+        return matches.sorted(by: Self.isBeforeInArrangement)
+    }
+
+    static func isBeforeInArrangement(_ lhs: DisplaySnapshot, _ rhs: DisplaySnapshot) -> Bool {
+        if lhs.bounds.minX != rhs.bounds.minX { return lhs.bounds.minX < rhs.bounds.minX }
+        if lhs.bounds.minY != rhs.bounds.minY { return lhs.bounds.minY < rhs.bounds.minY }
+        return lhs.displayID < rhs.displayID
     }
 
     private static func matches(
