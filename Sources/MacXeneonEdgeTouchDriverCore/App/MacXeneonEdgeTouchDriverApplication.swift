@@ -134,7 +134,29 @@ public final class MacXeneonEdgeTouchDriverApplication {
         DriverLoggers.log(.notice, category: .lifecycle, "Starting independent multi-display touch driver.")
 
         installSignalHandlers()
-        if Self.hasSyntheticEventPermission() {
+        do {
+            try control.start { [weak self] command, reply in
+                guard let self else { reply("{\"error\":\"Driver stopped\"}"); return }
+                if command == "setup-status" {
+                    DispatchQueue.main.async {
+                        reply(self.json(["state": self.observationGate.isMonitoring ? "ready" : "privacyRequired"]))
+                    }
+                } else {
+                    self.gestureQueue.async {
+                        guard self.observationGate.isMonitoring else {
+                            reply("{\"error\":\"Driver setup is incomplete\"}")
+                            return
+                        }
+                        reply(self.handleControlCommand(command))
+                    }
+                }
+            }
+        } catch {
+            DriverLoggers.log(.fault, category: .lifecycle, "Could not start driver controls: \(error.localizedDescription)")
+            stop()
+            return EXIT_FAILURE
+        }
+        if DriverPrivacyPermission.missing.isEmpty {
             guard startDriver() else {
                 stop()
                 return EXIT_FAILURE
@@ -165,10 +187,6 @@ public final class MacXeneonEdgeTouchDriverApplication {
         registerScreenParametersObserver()
 
         do {
-            try control.start { [weak self] command, reply in
-                guard let self else { reply("{\"error\":\"Driver stopped\"}"); return }
-                self.gestureQueue.async { reply(self.handleControlCommand(command)) }
-            }
             try hidMonitor.start()
         } catch {
             DriverLoggers.log(.fault, category: .lifecycle, "Could not start HID monitor: \(error.localizedDescription)")
@@ -184,6 +202,7 @@ public final class MacXeneonEdgeTouchDriverApplication {
     public func stop() {
         guard isRunning else { return }
         isRunning = false
+        control.stop()
         if let permissionSetup {
             permissionSetup.dismiss()
             self.permissionSetup = nil
@@ -195,7 +214,6 @@ public final class MacXeneonEdgeTouchDriverApplication {
         }
         observationGate.stop()
         hidMonitor.stop()
-        control.stop()
         workspaceObservers.forEach { NSWorkspace.shared.notificationCenter.removeObserver($0) }
         workspaceObservers.removeAll()
         unregisterDisplayReconfigurationCallback()
@@ -1306,20 +1324,10 @@ public final class MacXeneonEdgeTouchDriverApplication {
         }
     }
 
-    private static func hasSyntheticEventPermission() -> Bool {
-        CGPreflightPostEventAccess() || AXIsProcessTrusted()
-    }
-
     private func showPermissionSetup() {
         logPermissionIdentity()
-        DriverLoggers.log(.notice, category: .lifecycle, "Synthetic mouse event permission is not granted. Waiting in startup setup.")
+        DriverLoggers.log(.notice, category: .lifecycle, "Required privacy access is missing. Waiting in startup setup.")
         let setup = MousePermissionSetupWindow(
-            checkAccess: Self.hasSyntheticEventPermission,
-            requestAccess: {
-                guard !CGRequestPostEventAccess() else { return }
-                let promptKey = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
-                _ = AXIsProcessTrustedWithOptions([promptKey: true] as CFDictionary)
-            },
             onGranted: { [weak self] in
                 guard let self, let setup = self.permissionSetup else { return }
                 // Pairing can cover the setup window when the touchscreen is the main display.
@@ -1384,6 +1392,7 @@ final class ObservationGate {
     }
     private var observationRevision: UInt64 = 0
     var revision: UInt64 { lock.lock(); defer { lock.unlock() }; return observationRevision }
+    var isMonitoring: Bool { lock.lock(); defer { lock.unlock() }; return monitoring && !stopped }
     var isFresh: Bool {
         lock.lock(); defer { lock.unlock() }
         return freshLocked()

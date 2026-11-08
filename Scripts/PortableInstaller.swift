@@ -157,6 +157,7 @@ func runInstallerFlow() {
         let result: (Int32, String)
         do { result = try run("/bin/sh", arguments) }
         catch { result = (1, error.localizedDescription) }
+        let startup = result.0 == 0 && !removing ? waitForDriverStartup() : nil
         DispatchQueue.main.async {
             window.close()
             if result.0 != 0 {
@@ -166,7 +167,7 @@ func runInstallerFlow() {
             } else if removing {
                 showMessage("Driver removed", "The driver and its settings have been removed from this Mac account. Logs were kept.")
             } else {
-                showInstalled()
+                showInstalled(startup)
             }
             installerDelegate.operationInProgress = false
             application.terminate(nil)
@@ -174,21 +175,44 @@ func runInstallerFlow() {
     }
 }
 
-func showInstalled() {
+enum DriverStartup: String {
+    case ready
+    case privacyRequired
+}
+
+func waitForDriverStartup() -> DriverStartup? {
     let driver = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support/MacXeneonEdgeTouchDriver/bin/MacXeneonEdgeTouchDriver")
-    while true {
+    let deadline = ProcessInfo.processInfo.systemUptime + 5
+    repeat {
+        if let (exitCode, reply) = try? run(driver.path, ["setup-status"]), exitCode == 0,
+           let response = try? JSONSerialization.jsonObject(with: Data(reply.utf8)) as? [String: String],
+           let state = response["state"].flatMap(DriverStartup.init(rawValue:)) {
+            return state
+        }
+        Thread.sleep(forTimeInterval: 0.2)
+    } while ProcessInfo.processInfo.systemUptime < deadline
+    return nil
+}
+
+func showInstalled(_ startup: DriverStartup?) {
+    switch startup {
+    case .privacyRequired:
+        // The installed process owns the permission dialog and performs the checks.
+        return
+    case .ready:
         let alert = NSAlert()
-        alert.messageText = "Driver files installed"
-        alert.informativeText = "In System Settings → Privacy & Security, allow the driver under Device Control and Data Access (Accessibility on older macOS) and Input Monitoring. If it is missing, use Show Driver to find the exact file to add.\n\nIf the driver's setup window is open, click Check Again after granting access, then click Done when it confirms the driver is running. Follow any display pairing prompts, then try a tap."
-        alert.addButton(withTitle: "Open Privacy Settings")
-        alert.addButton(withTitle: "Show Driver")
+        alert.messageText = "The driver is running"
+        alert.informativeText = "The driver is installed and running in the background. It starts automatically when you log in. If a touchscreen needs pairing, the driver will guide you."
+        let mark = NSImage.SymbolConfiguration(pointSize: 48, weight: .regular)
+            .applying(NSImage.SymbolConfiguration(paletteColors: [.white, .systemGreen]))
+        alert.icon = NSImage(systemSymbolName: "checkmark.circle.fill", accessibilityDescription: nil)?
+            .withSymbolConfiguration(mark)
         alert.addButton(withTitle: "Done")
-        let response = alert.runModal()
-        if response == .alertFirstButtonReturn {
-            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security") { NSWorkspace.shared.open(url) }
-        } else if response == .alertSecondButtonReturn {
-            NSWorkspace.shared.activateFileViewerSelecting([driver])
-        } else { return }
+        alert.runModal()
+    case nil:
+        showMessage("Driver startup could not be confirmed",
+                    "The driver files were installed, but the driver did not report that it started. Try Install or Update again.",
+                    style: .warning)
     }
 }
 

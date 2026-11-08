@@ -76,12 +76,11 @@ Make sure the Edge has a working picture and a USB connection for touch.
 1. Copy the ZIP to the Mac and double-click it to extract the files.
 2. Open `Install Xeneon Touch.app`. Read the explanation, lift your fingers from the Edge and release all mouse buttons.
 3. Choose **Install or Update**. The installer sets up the driver for your logged-in account and starts it. It keeps existing settings and saved display pairings.
-4. Choose **Open Privacy Settings**. In Privacy & Security, enable `MacXeneonEdgeTouchDriver` under Device Control and Data Access and Input Monitoring. On macOS 26 and earlier, the first category is called Accessibility.
-5. Use **Show Driver** if you need to add the installed executable to a permission list. Approve that driver, rather than the installer app.
-6. If the driver's setup window is open, click **Check Again** after enabling permissions. When it confirms the driver is running, click **Done**. Follow any display pairing prompts, then try a tap on the Edge and check that your mouse still works normally.
+4. If setup shows a red privacy warning, click **Open Privacy Settings**. Enable `MacXeneonEdgeTouchDriver` in the categories listed by setup, then click **Check Again**. If you need to add the driver manually, its path is `~/Library/Application Support/MacXeneonEdgeTouchDriver/bin/MacXeneonEdgeTouchDriver`.
+5. When setup confirms the driver is running, click **Done**. Follow any display pairing prompts, then try a tap on the Edge and check that your mouse still works normally.
 
 The driver waits while permission is missing. Each Mac needs its own approvals, even when the same certificate signed both copies. Work Mac permissions may be managed by your administrator.
 
 You can close the installer app after setup. Keep a copy so you can reopen it to remove the driver. To update, make or obtain a ZIP built from the newer driver source and use that installer app. **Remove Driver** asks for confirmation before removing the driver, settings, saved display pairings and installation backups. It keeps logs.
 
-If setup still reports missing access after switching signing identities, remove the old permission entry and use **Show Driver** to add the current executable. See the [driver troubleshooting guide](../README.md#troubleshooting) for other touch issues.
+If setup still reports missing access after switching signing identities, remove the old permission entry and add the current executable at the path above. See the [driver troubleshooting guide](../README.md#troubleshooting) for other touch issues.

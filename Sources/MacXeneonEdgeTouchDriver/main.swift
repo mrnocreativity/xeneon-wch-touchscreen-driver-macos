@@ -17,8 +17,8 @@ struct MacXeneonEdgeTouchDriverMain {
         }
         if !arguments.isEmpty {
             guard arguments.count == 1,
-                  ["status", "re-pair", "cancel-pairing"].contains(arguments[0]) else {
-                print("Usage: MacXeneonEdgeTouchDriver [--check-hardware | status | re-pair | cancel-pairing]")
+                  ["status", "setup-status", "re-pair", "cancel-pairing"].contains(arguments[0]) else {
+                print("Usage: MacXeneonEdgeTouchDriver [--check-hardware | status | setup-status | re-pair | cancel-pairing]")
                 exit(arguments == ["--help"] ? EXIT_SUCCESS : EXIT_FAILURE)
             }
             do {

@@ -176,7 +176,7 @@ CODESIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" ./Scripts/insta
 
 Without `CODESIGN_IDENTITY`, Swift's linker ad hoc signature is used. Its designated requirement changes whenever the executable changes, so macOS may require privacy approval again after an upgrade. The signing identity is supplied only through the environment and is never written into the repository, configuration, LaunchAgent, or pairing file.
 
-The driver needs permission to turn touches into mouse clicks and other mouse events. If access is missing at startup, the setup window offers **Open System Settings**, **Check Again**, and **Quit**. In **Privacy & Security**, allow the installed driver under **Device Control and Data Access** (**Accessibility** on earlier macOS), then click **Check Again**. Also grant **Input Monitoring** so the driver can read touch reports.
+The driver needs **Input Monitoring** to read touch reports and **Device Control and Data Access** (**Accessibility** on earlier macOS) to turn touches into mouse clicks and other mouse events. If either permission is missing at startup, the setup window lists what to grant. Click **Open Privacy Settings**, allow the installed driver in the listed categories, then click **Check Again**.
 
 If you quit setup, you can start the installed driver again with:
 

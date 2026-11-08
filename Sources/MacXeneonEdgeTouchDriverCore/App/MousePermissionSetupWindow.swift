@@ -1,31 +1,58 @@
 import AppKit
+import ApplicationServices
+
+enum DriverPrivacyPermission: CaseIterable {
+    case mouseEvents
+    case inputMonitoring
+
+    var isGranted: Bool {
+        switch self {
+        case .mouseEvents: CGPreflightPostEventAccess() || AXIsProcessTrusted()
+        case .inputMonitoring: CGPreflightListenEventAccess()
+        }
+    }
+
+    var settingName: String {
+        switch self {
+        case .mouseEvents: "Device Control and Data Access (Accessibility on earlier macOS)"
+        case .inputMonitoring: "Input Monitoring"
+        }
+    }
+
+    func request() {
+        switch self {
+        case .mouseEvents:
+            guard !CGRequestPostEventAccess() else { return }
+            let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
+            _ = AXIsProcessTrustedWithOptions([key: true] as CFDictionary)
+        case .inputMonitoring:
+            _ = CGRequestListenEventAccess()
+        }
+    }
+
+    static var missing: [Self] { allCases.filter { !$0.isGranted } }
+}
 
 /// Guides the user through missing mouse-event access and confirms startup.
 final class MousePermissionSetupWindow: NSObject, NSWindowDelegate {
-    private let checkAccess: () -> Bool
-    private let requestAccess: @Sendable () -> Void
     private let onGranted: () -> Void
     private let onQuit: () -> Void
     private let onDone: () -> Void
-    private var didRequestAccess = false
+    private var requestedPermissions: Set<DriverPrivacyPermission> = []
     private(set) var didCompleteSetup = false
     private let status = NSTextField(wrappingLabelWithString: "")
     private let window = NSWindow(
-        contentRect: NSRect(x: 0, y: 0, width: 470, height: 210),
+        contentRect: NSRect(x: 0, y: 0, width: 470, height: 245),
         styleMask: [.titled, .closable],
         backing: .buffered,
         defer: false
     )
 
     init(
-        checkAccess: @escaping () -> Bool,
-        requestAccess: @escaping @Sendable () -> Void,
         onGranted: @escaping () -> Void,
         onQuit: @escaping () -> Void,
         onDone: @escaping () -> Void
     ) {
-        self.checkAccess = checkAccess
-        self.requestAccess = requestAccess
         self.onGranted = onGranted
         self.onQuit = onQuit
         self.onDone = onDone
@@ -35,19 +62,19 @@ final class MousePermissionSetupWindow: NSObject, NSWindowDelegate {
         window.isReleasedWhenClosed = false
         window.delegate = self
 
-        let title = NSTextField(labelWithString: "Mouse-event permission required")
+        let title = NSTextField(labelWithString: "Setup incomplete · Privacy access required")
         title.font = .systemFont(ofSize: 17, weight: .semibold)
+        title.textColor = .systemRed
         let explanation = NSTextField(wrappingLabelWithString:
-            "The driver turns touches into mouse clicks and other mouse events. It cannot provide touch control until you grant access."
+            "The driver is installed. It needs privacy access to read touches and turn them into mouse events."
         )
-        status.stringValue =
-            "In System Settings → Privacy & Security, allow MacXeneonEdgeTouchDriver under Device Control and Data Access (Accessibility on earlier macOS). Then click Check Again."
-        status.textColor = .secondaryLabelColor
+        showMissing(DriverPrivacyPermission.missing)
+        status.textColor = .systemRed
 
         let quit = NSButton(title: "Quit", target: self, action: #selector(quitSetup))
         quit.keyEquivalent = "\u{1b}"
         let check = NSButton(title: "Check Again", target: self, action: #selector(checkAgain))
-        let settings = NSButton(title: "Open System Settings", target: self, action: #selector(openSettings))
+        let settings = NSButton(title: "Open Privacy Settings", target: self, action: #selector(openSettings))
         settings.keyEquivalent = "\r"
         let buttons = NSStackView(views: [quit, check, settings])
         buttons.spacing = 8
@@ -126,20 +153,32 @@ final class MousePermissionSetupWindow: NSObject, NSWindowDelegate {
     }
 
     @objc private func checkAgain() {
-        if checkAccess() {
+        let missing = DriverPrivacyPermission.missing
+        if missing.isEmpty {
             onGranted()
         } else {
-            status.stringValue =
-                "macOS still reports access is missing. In Privacy & Security, check that the permission entry matches the installed MacXeneonEdgeTouchDriver, then click Check Again."
+            showMissing(missing)
         }
     }
 
-    @objc private func openSettings() {
-        if !didRequestAccess {
-            didRequestAccess = true
-            DispatchQueue.global(qos: .userInitiated).async(execute: requestAccess)
+    private func showMissing(_ missing: [DriverPrivacyPermission]) {
+        guard !missing.isEmpty else {
+            status.stringValue = "Click Check Again to start the driver."
+            return
         }
-        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.systempreferences"),
+        let names = missing.map(\.settingName).joined(separator: " and ")
+        status.stringValue = "Allow MacXeneonEdgeTouchDriver under \(names) in Privacy & Security, then click Check Again."
+    }
+
+    @objc private func openSettings() {
+        let missing = DriverPrivacyPermission.missing
+        guard !missing.isEmpty else { onGranted(); return }
+        showMissing(missing)
+        if let permission = missing.first(where: { !requestedPermissions.contains($0) }) {
+            requestedPermissions.insert(permission)
+            DispatchQueue.global(qos: .userInitiated).async { permission.request() }
+        }
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security"),
               NSWorkspace.shared.open(url) else {
             status.stringValue = "Open System Settings manually, then go to Privacy & Security to allow the driver."
             return
