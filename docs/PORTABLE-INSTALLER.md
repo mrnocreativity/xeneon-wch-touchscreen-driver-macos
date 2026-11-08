@@ -78,7 +78,7 @@ Make sure the Edge has a working picture and a USB connection for touch.
 3. Choose **Install or Update**. The installer sets up the driver for your logged-in account and starts it. It keeps existing settings and saved display pairings.
 4. Choose **Open Privacy Settings**. In Privacy & Security, enable `MacXeneonEdgeTouchDriver` under Device Control and Data Access and Input Monitoring. On macOS 26 and earlier, the first category is called Accessibility.
 5. Use **Show Driver** if you need to add the installed executable to a permission list. Approve that driver, rather than the installer app.
-6. If the driver's setup window is open, click **Check Again** after enabling permissions. Follow any display pairing prompts, then try a tap on the Edge and check that your mouse still works normally.
+6. If the driver's setup window is open, click **Check Again** after enabling permissions. When it confirms the driver is running, click **Done**. Follow any display pairing prompts, then try a tap on the Edge and check that your mouse still works normally.
 
 The driver waits while permission is missing. Each Mac needs its own approvals, even when the same certificate signed both copies. Work Mac permissions may be managed by your administrator.
 

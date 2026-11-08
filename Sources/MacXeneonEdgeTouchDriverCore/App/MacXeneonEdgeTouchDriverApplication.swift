@@ -61,6 +61,7 @@ public final class MacXeneonEdgeTouchDriverApplication {
     private var observationLost = false
     private var sleeping = false
     private var calibrationPaused = false
+    private var awaitingSetupAcknowledgement = false
     private var waitingForStormRecovery = false
     private var lastObservedDisplays: [DisplaySnapshot]?
     private var responsivenessPaused = false
@@ -179,9 +180,11 @@ public final class MacXeneonEdgeTouchDriverApplication {
         if let permissionSetup {
             permissionSetup.dismiss()
             self.permissionSetup = nil
-            signalSources.removeAll()
-            stopApplicationEventLoop()
-            return
+            if !permissionSetup.didCompleteSetup {
+                signalSources.removeAll()
+                stopApplicationEventLoop()
+                return
+            }
         }
         observationGate.stop()
         hidMonitor.stop()
@@ -526,7 +529,7 @@ public final class MacXeneonEdgeTouchDriverApplication {
     }
 
     private func beginPairingIfNeeded(resolvedDisplays: [TouchDeviceIdentity: DisplaySnapshot]? = nil) {
-        guard !calibrationPaused, !sleeping, !configurationPending, !observationLost,
+        guard !awaitingSetupAcknowledgement, !calibrationPaused, !sleeping, !configurationPending, !observationLost,
               !responsivenessPaused, observationGate.isFresh else { return }
         if waitForQuietPairingIfNeeded() { return }
         waitingForStormRecovery = false
@@ -1222,9 +1225,13 @@ public final class MacXeneonEdgeTouchDriverApplication {
             },
             onGranted: { [weak self] in
                 guard let self, let setup = self.permissionSetup else { return }
-                setup.dismiss()
-                self.permissionSetup = nil
-                if !self.startDriver() {
+                // Pairing can cover the setup window when the touchscreen is the main display.
+                self.gestureQueue.async { self.awaitingSetupAcknowledgement = true }
+                if self.startDriver() {
+                    setup.showSuccess()
+                } else {
+                    setup.dismiss()
+                    self.permissionSetup = nil
                     self.exitStatus = EXIT_FAILURE
                     self.stop()
                 }
@@ -1232,6 +1239,13 @@ public final class MacXeneonEdgeTouchDriverApplication {
             onQuit: { [weak self] in
                 guard let self, self.permissionSetup != nil else { return }
                 self.stop()
+            },
+            onDone: { [weak self] in
+                guard let self, let setup = self.permissionSetup else { return }
+                setup.dismiss()
+                self.permissionSetup = nil
+                self.gestureQueue.async { self.awaitingSetupAcknowledgement = false }
+                self.scheduleDisplayReconciliation(reason: "Setup confirmation dismissed")
             }
         )
         permissionSetup = setup

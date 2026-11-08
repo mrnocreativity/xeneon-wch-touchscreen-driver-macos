@@ -12,7 +12,8 @@ You do not need Xcode, Swift or signing certificates on that Mac.
    If the driver is not listed, choose Show Driver in the installer and add
    that exact file in System Settings.
 6. If the driver's setup window is open, click Check Again after granting
-   access. Follow any display pairing prompts, then try a tap and a drag.
+   access. Click Done when the driver confirms it is running. Follow any
+   display pairing prompts, then try a tap and a drag.
 
 macOS asks for these permissions separately on each Mac. Signing does not
 transfer them from the development Mac. A work Mac may require IT approval.

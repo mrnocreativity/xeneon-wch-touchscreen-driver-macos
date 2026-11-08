@@ -157,7 +157,7 @@ func showInstalled() {
     while true {
         let alert = NSAlert()
         alert.messageText = "Driver files installed"
-        alert.informativeText = "In System Settings → Privacy & Security, allow the driver under Device Control and Data Access (Accessibility on older macOS) and Input Monitoring. If it is missing, use Show Driver to find the exact file to add.\n\nIf the driver's setup window is open, click Check Again after granting access. Follow any display pairing prompts, then try a tap."
+        alert.informativeText = "In System Settings → Privacy & Security, allow the driver under Device Control and Data Access (Accessibility on older macOS) and Input Monitoring. If it is missing, use Show Driver to find the exact file to add.\n\nIf the driver's setup window is open, click Check Again after granting access, then click Done when it confirms the driver is running. Follow any display pairing prompts, then try a tap."
         alert.addButton(withTitle: "Open Privacy Settings")
         alert.addButton(withTitle: "Show Driver")
         alert.addButton(withTitle: "Done")
