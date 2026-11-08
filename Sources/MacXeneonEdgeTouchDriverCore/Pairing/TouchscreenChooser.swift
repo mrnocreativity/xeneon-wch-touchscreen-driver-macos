@@ -31,9 +31,19 @@ final class TouchscreenChooser: NSObject, NSWindowDelegate {
                   CGDisplayBounds(display.displayID) == display.bounds else { return nil }
             return (display, screen)
         }
-        guard eligible.isSubset(of: Set(visible.map { $0.0.displayID })) else { return false }
+        let mainDisplayID = CGMainDisplayID()
+        guard eligible.isSubset(of: Set(visible.map { $0.0.displayID })),
+              let mainScreen = screens.first(where: { PairingOverlayController.displayID(for: $0) == mainDisplayID })
+        else { return false }
         self.completion = completion
         requiredCount = count
+
+        let frame = mainScreen.visibleFrame
+        let maxVisibleRows = max(1, min(7, Int((frame.height - 310) / 28)))
+        let listHeight = CGFloat(min(max(visible.count, 1), maxVisibleRows) * 28 + 8)
+        let window = NSPanel(contentRect: CGRect(x: 0, y: 0, width: 450, height: listHeight + 155),
+                             styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        window.setFrameOrigin(CGPoint(x: frame.midX - window.frame.width / 2, y: frame.midY - window.frame.height / 2))
 
         let heading = NSTextField(labelWithString: "Choose your touchscreens")
         heading.font = .boldSystemFont(ofSize: 17)
@@ -52,7 +62,8 @@ final class TouchscreenChooser: NSObject, NSWindowDelegate {
                                     target: self, action: #selector(selectionChanged))
             checkbox.isEnabled = eligible.contains(display.displayID)
             list.addArrangedSubview(checkbox)
-            let (overlay, badge) = makeOverlay(for: screen, number: number)
+            let (overlay, badge) = makeOverlay(for: screen, number: number,
+                                               chooserFrame: display.displayID == mainDisplayID ? window.frame : nil)
             rows.append(Row(id: display.displayID, checkbox: checkbox, overlay: overlay, badge: badge))
         }
         let scroll = NSScrollView()
@@ -83,9 +94,6 @@ final class TouchscreenChooser: NSObject, NSWindowDelegate {
         stack.alignment = .leading
         stack.spacing = 12
         stack.translatesAutoresizingMaskIntoConstraints = false
-        let listHeight = CGFloat(min(max(visible.count, 1), 7) * 28 + 8)
-        let window = NSPanel(contentRect: CGRect(x: 0, y: 0, width: 450, height: listHeight + 155),
-                             styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = "Touchscreen Setup"
         window.level = .modalPanel
         window.isReleasedWhenClosed = false
@@ -109,18 +117,12 @@ final class TouchscreenChooser: NSObject, NSWindowDelegate {
                 return false
             }
         }
-        if let frame = NSScreen.main?.visibleFrame {
-            // Leave the center of the chooser's display clear for its number.
-            window.setFrameTopLeftPoint(NSPoint(x: frame.minX + 16, y: frame.maxY - 16))
-        } else {
-            window.center()
-        }
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
         return true
     }
 
-    private func makeOverlay(for screen: NSScreen, number: Int) -> (NSPanel, DisplayNumberBadge) {
+    private func makeOverlay(for screen: NSScreen, number: Int, chooserFrame: CGRect?) -> (NSPanel, DisplayNumberBadge) {
         let overlay = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel],
                               backing: .buffered, defer: false, screen: screen)
         overlay.level = .floating
@@ -128,7 +130,14 @@ final class TouchscreenChooser: NSObject, NSWindowDelegate {
         overlay.ignoresMouseEvents = true
         overlay.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         let content = NSView()
-        let diameter = min(220, min(screen.frame.width, screen.frame.height) * 0.38)
+        var diameter = min(220, min(screen.frame.width, screen.frame.height) * 0.38)
+        var centerOffset: CGFloat = 0
+        if let chooserFrame {
+            // Keep the main display's badge above its centered chooser.
+            let gap: CGFloat = 16
+            diameter = min(diameter, max(1, screen.visibleFrame.maxY - chooserFrame.maxY - 2 * gap))
+            centerOffset = screen.frame.midY - (chooserFrame.maxY + gap + diameter / 2)
+        }
         let badge = DisplayNumberBadge(number: number, diameter: diameter)
         badge.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(badge)
@@ -136,7 +145,7 @@ final class TouchscreenChooser: NSObject, NSWindowDelegate {
             badge.widthAnchor.constraint(equalToConstant: diameter),
             badge.heightAnchor.constraint(equalTo: badge.widthAnchor),
             badge.centerXAnchor.constraint(equalTo: content.centerXAnchor),
-            badge.centerYAnchor.constraint(equalTo: content.centerYAnchor)
+            badge.centerYAnchor.constraint(equalTo: content.centerYAnchor, constant: centerOffset)
         ])
         TouchscreenOverlayBackdrop.install(in: overlay, content: content)
         overlay.setFrame(screen.frame, display: true)
@@ -186,6 +195,7 @@ private final class DisplayNumberBadge: NSView {
         layer?.cornerRadius = diameter / 2
         layer?.borderWidth = 3
         label.font = .monospacedDigitSystemFont(ofSize: diameter * 0.53, weight: .semibold)
+        label.textColor = .white
         label.translatesAutoresizingMaskIntoConstraints = false
         addSubview(label)
         NSLayoutConstraint.activate([
@@ -198,10 +208,8 @@ private final class DisplayNumberBadge: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     func update(selected: Bool) {
-        let pink = NSColor.systemPink
-        let green = NSColor(srgbRed: 0.12, green: 0.49, blue: 0.25, alpha: 1)
+        let green = NSColor(srgbRed: 0, green: 0.67, blue: 0.22, alpha: 1)
         layer?.backgroundColor = (selected ? green : .black).cgColor
-        layer?.borderColor = (selected ? green : pink).cgColor
-        label.textColor = selected ? .white : pink
+        layer?.borderColor = (selected ? green : .white).cgColor
     }
 }
