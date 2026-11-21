@@ -46,3 +46,18 @@ with two browser windows, both touchscreens, a double-click, scroll, hold-drag,
 and a deliberate focus change during the restoration interval. Observe real DOM
 pointer events without browser focus emulation. Automated tests alone cannot
 prove native inactive-window delivery or physical display behavior.
+
+## Local verification
+
+On November 21, 2026, all 185 Swift tests passed with warnings treated as errors,
+and the release build passed with the same compiler setting. Whitespace checks
+passed. Tests include focus activation deadlines, exact-window identity, missing
+targets, cancellation and late callbacks, user focus changes, restoration failure,
+focus handoff between controllers, buffered taps and scrolling, and existing
+gesture and pairing regressions.
+
+The connected-hardware check found no supported USB touch controller, setup
+reported `waitingForHardware`, and display enumeration found only the built-in
+display. The installed driver was therefore left unchanged. Signed installation,
+real browser pointer-event observation, and physical touch acceptance remain
+pending connection of the external display and its USB touch interface.

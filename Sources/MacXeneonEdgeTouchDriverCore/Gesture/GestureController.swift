@@ -30,6 +30,11 @@ public final class GestureController {
     private var lastCompletedTouchTimestamp: DispatchTime?
     private var eligibleFirstTap: EligibleTap?
     private var hasCapturedFocus = false
+    private var preparingTarget = false
+    private var preparationGeneration: UInt64 = 0
+    private var deferredMove: TouchEvent?
+    private var deferredScrollStart: TouchEvent?
+    private var deferredRelease: TouchEvent?
 
     public init(
         mapperProvider: @escaping () -> CoordinateMapper?,
@@ -56,6 +61,22 @@ public final class GestureController {
             return
         }
         let point = mapper.map(rawX: event.rawX, rawY: event.rawY)
+
+        if preparingTarget {
+            guard case .singleTouch(let context) = state, context.contactID == event.contactID else { return }
+            // Coalesce movement while native focus is pending; retain its final release.
+            if deferredRelease == nil {
+                if event.kind == .move {
+                    deferredMove = event
+                    if deferredScrollStart == nil,
+                       hypot(point.x - context.startPoint.x, point.y - context.startPoint.y) >= timing.movementThresholdPoints {
+                        deferredScrollStart = event
+                    }
+                }
+                if event.kind == .up { deferredRelease = event }
+            }
+            return
+        }
 
         switch (state, event.kind) {
         case (.idle, .down):
@@ -134,7 +155,31 @@ public final class GestureController {
             phase: .pending,
             clickCount: 1
         ))
-        scheduleHoldToDrag(contactID: event.contactID)
+        preparingTarget = true
+        preparationGeneration &+= 1
+        let attempt = preparationGeneration
+        let startedAt = DispatchTime.now().uptimeNanoseconds
+        focusRestorer.prepareTarget(at: point, callbackQueue: schedulingQueue ?? .main) { [weak self] success in
+            guard let self, self.preparingTarget, self.preparationGeneration == attempt else { return }
+            self.preparingTarget = false
+            guard success, self.mayRoute(), self.focusRestorer.isTargetFocused() else {
+                self.forceCancel()
+                return
+            }
+            let move = self.deferredMove
+            let scrollStart = self.deferredScrollStart
+            let release = self.deferredRelease
+            self.deferredMove = nil
+            self.deferredScrollStart = nil
+            self.deferredRelease = nil
+            if let scrollStart { self.handle(scrollStart) }
+            if let move, move != scrollStart { self.handle(move) }
+            if let release { self.handle(release) }
+            if release == nil, case .singleTouch(let context) = self.state, context.phase == .pending {
+                let elapsedMs = Int((DispatchTime.now().uptimeNanoseconds - startedAt) / 1_000_000)
+                self.scheduleHoldToDrag(contactID: event.contactID, delayMs: max(0, self.timing.holdToDragMs - elapsedMs))
+            }
+        }
     }
 
     private func completeFinishingTapImmediately(_ context: SingleTouchContext) {
@@ -177,6 +222,7 @@ public final class GestureController {
                 phase: .began
             )
         case .scrolling:
+            guard focusRestorer.isTargetFocused() else { forceCancel(); return }
             state = .singleTouch(updated)
             inputSink.postScroll(
                 deltaX: deltaX * timing.scrollSensitivity,
@@ -184,6 +230,7 @@ public final class GestureController {
                 phase: .changed
             )
         case .dragging:
+            guard focusRestorer.isTargetFocused() else { forceCancel(); return }
             state = .singleTouch(updated)
             cursorController.updatePosition(point)
             inputSink.postMouseDragged(to: point)
@@ -231,8 +278,8 @@ public final class GestureController {
         }
     }
 
-    private func scheduleHoldToDrag(contactID: Int) {
-        pendingHold = schedule(after: timing.holdToDragMs) { [weak self] in
+    private func scheduleHoldToDrag(contactID: Int, delayMs: Int) {
+        pendingHold = schedule(after: delayMs) { [weak self] in
             guard let self,
                   case .singleTouch(var context) = self.state,
                   context.contactID == contactID,
@@ -294,13 +341,9 @@ public final class GestureController {
 
     private func borrowCursor(at point: CGPoint) -> Bool {
         guard mayRoute() else { forceCancel(); return false }
+        guard focusRestorer.isTargetFocused() else { forceCancel(); return false }
         guard cursorController.borrow(warpingTo: point) else {
-            if eligibleFirstTap != nil {
-                finalizeTapSequenceFocus()
-            } else {
-                focusRestorer.discardCapturedWindow()
-                hasCapturedFocus = false
-            }
+            finalizeTapSequenceFocus()
             transitionToIdle()
             return false
         }
@@ -309,6 +352,12 @@ public final class GestureController {
 
     private func cancelPendingWork() {
         workGeneration &+= 1
+        preparationGeneration &+= 1
+        preparingTarget = false
+        deferredMove = nil
+        deferredScrollStart = nil
+        deferredRelease = nil
+        focusRestorer.cancelTargetPreparation()
         pendingHold?.cancel()
         pendingMouseUp?.cancel()
         pendingCursorReturn?.cancel()

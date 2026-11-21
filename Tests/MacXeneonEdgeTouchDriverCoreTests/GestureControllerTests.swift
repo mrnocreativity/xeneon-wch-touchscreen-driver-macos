@@ -3,6 +3,113 @@ import CoreGraphics
 import XCTest
 
 final class GestureControllerTests: XCTestCase {
+    func testReleasedTapWaitsForTargetActivationAndClicksExactlyOnce() {
+        let input = RecordingInputSink()
+        let cursor = RecordingCursorController()
+        let focus = RecordingFocusRestorer()
+        focus.delayPreparation = true
+        let controller = makeController(input: input, cursor: cursor, focus: focus)
+        controller.handle(event(.down, rawX: 0, rawY: 0))
+        controller.handle(event(.up, rawX: 0, rawY: 0))
+        XCTAssertTrue(input.calls.isEmpty)
+        XCTAssertTrue(cursor.calls.isEmpty)
+        XCTAssertEqual(focus.preparedPoints, [CGPoint(x: 100, y: 200)])
+        focus.preparations[0](true)
+        XCTAssertEqual(input.mouseClickCounts, [1, 1])
+        XCTAssertEqual(controller.state, .idle)
+        focus.preparations[0](true)
+        XCTAssertEqual(input.mouseClickCounts, [1, 1], "Duplicate callbacks cannot click twice")
+    }
+
+    func testFailedActivationDropsReleasedTapWithoutBorrowingCursor() {
+        let input = RecordingInputSink()
+        let cursor = RecordingCursorController()
+        let focus = RecordingFocusRestorer()
+        focus.delayPreparation = true
+        let controller = makeController(input: input, cursor: cursor, focus: focus)
+        controller.handle(event(.down, rawX: 0, rawY: 0))
+        controller.handle(event(.up, rawX: 0, rawY: 0))
+        focus.preparations[0](false)
+        XCTAssertTrue(input.calls.isEmpty)
+        XCTAssertFalse(cursor.calls.contains(.borrow(CGPoint(x: 100, y: 200))))
+        XCTAssertEqual(controller.state, .idle)
+    }
+
+    func testCancelledPreparationCannotInjectIntoNextGesture() {
+        let input = RecordingInputSink()
+        let cursor = RecordingCursorController()
+        let focus = RecordingFocusRestorer()
+        focus.delayPreparation = true
+        let controller = makeController(input: input, cursor: cursor, focus: focus)
+        controller.handle(event(.down, rawX: 0, rawY: 0))
+        controller.forceCancel()
+        controller.handle(event(.down, rawX: 0, rawY: 0))
+        controller.handle(event(.up, rawX: 0, rawY: 0))
+        focus.preparations[0](true)
+        XCTAssertTrue(input.calls.isEmpty)
+        focus.preparations[1](true)
+        XCTAssertEqual(input.mouseClickCounts, [1, 1])
+    }
+
+    func testRoutingRevokedWhileActivatingDropsBufferedInput() {
+        let input = RecordingInputSink()
+        let cursor = RecordingCursorController()
+        let focus = RecordingFocusRestorer()
+        focus.delayPreparation = true
+        let controller = makeController(input: input, cursor: cursor, focus: focus)
+        var allowed = true
+        controller.mayRoute = { allowed }
+        controller.handle(event(.down, rawX: 0, rawY: 0))
+        controller.handle(event(.up, rawX: 0, rawY: 0))
+        allowed = false
+        focus.preparations[0](true)
+        XCTAssertTrue(input.calls.isEmpty)
+        XCTAssertEqual(controller.state, .idle)
+    }
+
+    func testBufferedMovementReturningToStartRemainsScrollRatherThanClick() {
+        let input = RecordingInputSink()
+        let cursor = RecordingCursorController()
+        let focus = RecordingFocusRestorer()
+        focus.delayPreparation = true
+        let controller = makeController(input: input, cursor: cursor, focus: focus)
+        controller.handle(event(.down, rawX: 0, rawY: 0))
+        controller.handle(event(.move, rawX: 1000, rawY: 0))
+        controller.handle(event(.move, rawX: 0, rawY: 0))
+        controller.handle(event(.up, rawX: 0, rawY: 0))
+        focus.preparations[0](true)
+        XCTAssertTrue(input.mouseClickCounts.isEmpty)
+        XCTAssertEqual(input.calls.count, 3, "Scroll begins, reverses, and ends")
+        XCTAssertEqual(controller.state, .idle)
+    }
+
+    func testFocusLostBeforeReleaseDropsTap() {
+        let input = RecordingInputSink()
+        let cursor = RecordingCursorController()
+        let focus = RecordingFocusRestorer()
+        let controller = makeController(input: input, cursor: cursor, focus: focus)
+        controller.handle(event(.down, rawX: 0, rawY: 0))
+        focus.targetFocused = false
+        controller.handle(event(.up, rawX: 0, rawY: 0))
+        XCTAssertTrue(input.calls.isEmpty)
+        XCTAssertEqual(controller.state, .idle)
+    }
+
+    func testFocusLostDuringDragReleasesButtonWithoutFurtherDragging() {
+        let input = RecordingInputSink()
+        let cursor = RecordingCursorController()
+        let focus = RecordingFocusRestorer()
+        let controller = makeController(input: input, cursor: cursor, focus: focus,
+            timing: GestureTiming(warpToClickDelayMs: 0, downToUpDelayMs: 0,
+                                  clickToWarpBackDelayMs: 0, tapDebounceMs: 0, holdToDragMs: 0))
+        controller.handle(event(.down, rawX: 0, rawY: 0))
+        focus.targetFocused = false
+        controller.handle(event(.move, rawX: 1000, rawY: 0))
+        XCTAssertEqual(input.mouseClickCounts, [1, 1])
+        XCTAssertEqual(input.calls.count, 2)
+        XCTAssertEqual(controller.state, .idle)
+    }
+
     func testStormTrackExpiryReleasesAnAlreadyStartedDragExactlyOnce() {
         let input = RecordingInputSink()
         let cursor = RecordingCursorController()
@@ -283,7 +390,7 @@ final class GestureControllerTests: XCTestCase {
         controller.handle(event(.up, rawX: 0, rawY: 0))
 
         XCTAssertEqual(cursor.calls, [.borrow(CGPoint(x: 100, y: 200))])
-        XCTAssertEqual(focus.calls, [.captureFocusedWindow, .discardCapturedWindow])
+        XCTAssertEqual(focus.calls, [.captureFocusedWindow, .restoreCapturedWindow])
         XCTAssertTrue(input.calls.isEmpty)
         XCTAssertEqual(controller.state, .idle)
     }
@@ -559,6 +666,18 @@ final class GestureControllerTests: XCTestCase {
 }
 
 private final class RecordingFocusRestorer: FocusRestorer {
+    var delayPreparation = false
+    var targetFocused = true
+    var preparedPoints: [CGPoint] = []
+    var preparations: [(Bool) -> Void] = []
+
+    func prepareTarget(at point: CGPoint, callbackQueue: DispatchQueue, completion: @escaping (Bool) -> Void) {
+        preparedPoints.append(point)
+        if delayPreparation { preparations.append(completion) } else { completion(true) }
+    }
+
+    func isTargetFocused() -> Bool { targetFocused }
+
     enum Call: Equatable {
         case captureFocusedWindow
         case restoreCapturedWindow

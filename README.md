@@ -20,6 +20,20 @@ This project is not affiliated with or endorsed by Corsair, Prechen, or WCH. `OS
 
 The driver pairs each physical controller with the display the user actually touches, follows live display geometry, restores the previously focused Mac window without another synthetic click, and isolates malformed input per controller.
 
+### Touching an inactive window
+
+Before sending touch input, the driver activates the exact visible window under
+your finger and verifies its focus. This lets a single tap operate a browser
+control while you are working in another application. Window activation uses
+Accessibility APIs; each tap generates one click.
+
+The cursor returns after the interaction. The previous application and window
+regain focus when the gesture finishes, with a short wait after a single tap to
+allow a second tap to form a double-click. Scrolling and dragging retain focus
+until the gesture ends. If you switch to another window during the interaction,
+the driver respects that focus change. If target activation cannot be verified,
+the gesture is cancelled and the driver logs the failure.
+
 ## Known Compatibility
 
 Last updated November 8, 2026. The table includes physically verified hardware, the original reference display, community reports, and compatibility candidates.
