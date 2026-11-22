@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 1.3.1 - 2026-11-22
+
+- Fixes taps on inactive browser windows being consumed only to activate the window. The driver activates and verifies the exact touched window before sending one normal interaction.
+- Buffers touch movement and release while activation completes, cancels failed or stale activation, and keeps double-click, scrolling, and hold-drag behavior.
+- Restores the original window and cursor after touch interaction while respecting a switch to another window. Transfers the original focus between touchscreen controllers when their tap sequences overlap.
+- Clarifies that the Logicom Nomad Touch controller identity is corroborated, while working touch with this macOS driver still needs confirmation from the reporter.
+
 ## 1.3.0 - 2026-11-08
 
 - Checks the connected USB touch controller before installing and offers a choice when compatibility cannot be verified.
