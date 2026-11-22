@@ -56,8 +56,18 @@ targets, cancellation and late callbacks, user focus changes, restoration failur
 focus handoff between controllers, buffered taps and scrolling, and existing
 gesture and pairing regressions.
 
-The connected-hardware check found no supported USB touch controller, setup
-reported `waitingForHardware`, and display enumeration found only the built-in
-display. The installed driver was therefore left unchanged. Signed installation,
-real browser pointer-event observation, and physical touch acceptance remain
-pending connection of the external display and its USB touch interface.
+The initial connected-hardware check found no supported USB touch controller,
+setup reported `waitingForHardware`, and display enumeration found only the
+built-in display. Installation was initially deferred.
+
+Later on November 21, installation proceeded at the user's explicit request
+while the display was disconnected. The canonical installer updated the driver
+with the existing stable signing identity. Verification confirmed a valid
+signature, a preserved signing requirement, a match to the release build,
+unchanged configuration and pairings, and a healthy running LaunchAgent waiting
+for hardware.
+
+On November 22, the user reported that the behavior "seems to work for now" and
+approved committing and pushing to the fork. This is initial user acceptance;
+the full multi-display gesture matrix and independent browser pointer-event
+observation have not been recorded.
